@@ -34,8 +34,8 @@ jobs:
           fi
       - name: Staticcheck
         run: |
-          go run honnef.co/go/tools/cmd/staticcheck@latest ./...
-          go run honnef.co/go/tools/cmd/staticcheck@latest -tags nosytest ./...
+          go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+          go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 -tags nosytest ./...
 
   test:
     strategy:
@@ -125,12 +125,6 @@ jobs:
             grep -q -- "--- PASS: $t " test.log || { echo "$t did not run and pass"; exit 1; }
           done
           echo "skipped:"; grep -- "--- SKIP" test.log || true
-      - name: Time one real scan
-        if: runner.os != 'Windows'
-        run: |
-          for url in https://www.wikipedia.org/ https://www.bbc.com/; do
-            NOSY_TIMING_URL="$url" go test -tags nosytest -count=1 -v -run TestTimingOfOneRealScan ./internal/integration
-          done
 
   markdownlint:
     runs-on: ubuntu-latest

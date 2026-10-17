@@ -108,5 +108,6 @@ Compare against the old engine within the tolerance above.
 
 ## Open questions
 
+- Site isolation is disabled (`IsolateOrigins`, `site-per-process`, `disable-site-isolation-trials`) and `enable-unsafe-swiftshader` is on. Both were inherited from the server container: isolation off puts cross-site iframe requests on the page's own DevTools session, and software WebGL stands in for a GPU the server lacks. On a desktop, site isolation must be on unless step 6 proves capture cannot work with it. Step 6 decides, with tests for out-of-process iframes.
 - The category names the index uses (`Advertising`, `Ad Motivated Tracking`, `CDN` and so on) are the old data's. Rules v1 has its own vocabulary, so `detect.ClassOf` and the CDN rule change in step 8.
 - Where the browser-only scan checks run once the old container assumptions are gone (step 5), and whether `Options.Remote` survives step 6.
