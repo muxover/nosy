@@ -499,7 +499,7 @@ func TestOwnSearchSuggestionsAreNotScored(t *testing.T) {
 	t.Parallel()
 	r := scanTest(t, "http://keyfirst.test/")
 	if len(r.KeyHits) == 0 || r.KeyHits[0].ThirdParty {
-		t.Fatalf("hits = %+v, want a first-party hit", r.KeyHits)
+		t.Fatalf("hits = %+v, want a first-party hit; fields tested %d, requests:\n%s", r.KeyHits, r.FieldsTested, requestURLs(r))
 	}
 	if r.Score.Parts.KeyCapture != 0 || r.Score.Total != 0 {
 		t.Errorf("score %d parts %+v, want 0", r.Score.Total, r.Score.Parts)
