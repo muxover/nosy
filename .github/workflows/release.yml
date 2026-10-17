@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve release notes
+        id: notes
+        run: |
+          file="release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$file" ]; then
+            echo "file=$file" >> "$GITHUB_OUTPUT"
+            # name = tag plus whatever follows it in the notes' title, so a second
+            # version number in the title can't take over
+            line=$(head -n1 "$file")
+            case "$line" in
+              *"$GITHUB_REF_NAME"*) title="${GITHUB_REF_NAME}${line#*"$GITHUB_REF_NAME"}" ;;
+              *) title="$GITHUB_REF_NAME" ;;
+            esac
+            echo "name=$title" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ steps.notes.outputs.name }}
+          body_path: ${{ steps.notes.outputs.file }}
+          generate_release_notes: ${{ steps.notes.outputs.file == '' }}
