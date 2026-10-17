@@ -50,6 +50,14 @@ Coming soon with v0.1.0.
 ```text
 nosy/
 ├── cmd/nosy/            # CLI entry point
+├── internal/
+│   ├── browser/         # Chromium driver: isolated visits, frame and worker capture, page instrumentation
+│   ├── capture/         # What one visit recorded: requests, cookies, API calls, page facts
+│   ├── detect/          # Companies, trackers, identifier cookies, session recording, typed-text leaks, bot checks
+│   ├── guard/           # Local proxy that blocks private addresses and pins DNS
+│   ├── integration/     # Planted-page tests against a real Chromium
+│   ├── score/           # Privacy score, formula v1
+│   └── testsite/        # Planted test pages, test builds only
 ├── release-notes/       # One file per release
 └── docs/PROJECT.md      # Maintainer notes
 ```
