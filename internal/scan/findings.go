@@ -76,13 +76,28 @@ func findings(r *Result, p detect.Parties) []Finding {
 		}
 		add("session-recording", Classified, "The page loaded a script from a session-recording vendor.", urls...)
 	}
+	// one finding per destination kind and encoding, however many fields leaked
+	type leak struct {
+		third bool
+		form  string
+	}
+	var order []leak
+	byLeak := map[leak][]string{}
 	for _, h := range r.TypedText.Hits {
+		k := leak{h.ThirdParty, h.Form}
+		if _, seen := byLeak[k]; !seen {
+			order = append(order, k)
+		}
+		byLeak[k] = append(byLeak[k], h.URL)
+	}
+	for _, k := range order {
 		where := "its own server"
-		if h.ThirdParty {
+		if k.third {
 			where = "a third party"
 		}
+		urls := byLeak[k]
 		add("typed-text", Observed,
-			fmt.Sprintf("Text typed into a field, without submitting, was sent to %s (%s encoding).", where, h.Form), h.URL)
+			fmt.Sprintf("Text typed into a field, without submitting, was sent to %s in %d %s (%s encoding).", where, len(urls), plural(len(urls), "request", "requests"), k.form), urls...)
 	}
 	if r.Consent.Present {
 		add("consent-api", Observed, "The page exposes a consent API: "+strings.Join(r.Consent.Via, ", ")+".")
