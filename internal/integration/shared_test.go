@@ -19,6 +19,7 @@ import (
 
 	"github.com/muxover/nosy/internal/browser"
 	"github.com/muxover/nosy/internal/guard"
+	"github.com/muxover/nosy/internal/scan"
 )
 
 // sharedBrowser starts a browser that stays up and is used by every scan of a
@@ -150,21 +151,21 @@ func TestSharedBrowserLeaksNothingBetweenScans(t *testing.T) {
 // signature is everything about a scan that the engine itself decides: the
 // companies, the cookies with their kinds, what fingerprinted, what captured
 // typed text, and the score.
-func signature(r *outcome) string {
+func signature(r *scan.Result) string {
 	var parts []string
-	for _, c := range r.Parties.Companies {
+	for _, c := range r.Companies {
 		parts = append(parts, fmt.Sprintf("company %s tracking=%v", c.Name, c.Tracking))
 	}
 	for _, c := range r.Cookies {
 		parts = append(parts, fmt.Sprintf("cookie %s %s third=%v ident=%v", c.Name, c.Domain, c.ThirdParty, c.Identifier))
 	}
-	for _, f := range r.Techniques {
+	for _, f := range r.Fingerprinting {
 		parts = append(parts, fmt.Sprintf("fingerprint %s %v", f.Name, f.Scripts))
 	}
-	for _, h := range r.KeyHits {
+	for _, h := range r.TypedText.Hits {
 		parts = append(parts, fmt.Sprintf("key %s third=%v", h.URL, h.ThirdParty))
 	}
-	parts = append(parts, fmt.Sprintf("fields %d recording %d status %s", r.FieldsTested, len(r.Recording), r.Status))
+	parts = append(parts, fmt.Sprintf("fields %d recording %d status %s", r.TypedText.FieldsTested, len(r.SessionRecording), r.Status))
 	if r.Score != nil {
 		parts = append(parts, fmt.Sprintf("score %d", r.Score.Total))
 	}
@@ -187,7 +188,7 @@ func TestSharedBrowserKeepsScansApart(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				r, err := runGated(sites[i], config{remote: remote})
+				r, err := runGated(sites[i], scan.Options{Remote: remote})
 				if err != nil {
 					t.Errorf("scan %s: %v", sites[i], err)
 					return
@@ -221,7 +222,7 @@ func TestChainsAndLoops(t *testing.T) {
 		t.Parallel()
 		before := hits("loop.test")
 		r := scanTest(t, "http://loop.test/a")
-		if r.Status != statusFailed || !strings.Contains(r.Reason, "too many times") {
+		if r.Status != scan.StatusFailed || !strings.Contains(r.Reason, "too many times") {
 			t.Errorf("status %s: %s", r.Status, r.Reason)
 		}
 		if n := hits("loop.test") - before; n > guard.MaxRedirects+3 {
@@ -232,7 +233,7 @@ func TestChainsAndLoops(t *testing.T) {
 		t.Parallel()
 		before := hits(chain)
 		r := scanTest(t, "http://n200.hops.test/")
-		if r.Status != statusFailed || !strings.Contains(r.Reason, "too many times") {
+		if r.Status != scan.StatusFailed || !strings.Contains(r.Reason, "too many times") {
 			t.Errorf("status %s: %s", r.Status, r.Reason)
 		}
 		if n := hits(chain) - before; n > guard.MaxRedirects+3 {
@@ -242,21 +243,21 @@ func TestChainsAndLoops(t *testing.T) {
 	t.Run("a chain just inside the limit", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, fmt.Sprintf("http://n%d.hops.test/", guard.MaxRedirects))
-		if r.Status != statusDone {
+		if r.Status != scan.StatusDone {
 			t.Errorf("status %s: %s", r.Status, r.Reason)
 		}
 	})
 	t.Run("a chain one past the limit", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, fmt.Sprintf("http://n%d.hops.test/", guard.MaxRedirects+1))
-		if r.Status != statusFailed || !strings.Contains(r.Reason, "too many times") {
+		if r.Status != scan.StatusFailed || !strings.Contains(r.Reason, "too many times") {
 			t.Errorf("status %s: %s", r.Status, r.Reason)
 		}
 	})
 	t.Run("a chain across sites", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, "http://hopa.test/")
-		if r.Status != statusDone || r.Site != "preview.test" {
+		if r.Status != scan.StatusDone || r.Site != "preview.test" {
 			t.Errorf("status %s site %s: %s", r.Status, r.Site, r.Reason)
 		}
 		for _, h := range []string{"hopa.test", "hopb.test", "hopc.test"} {
@@ -268,7 +269,7 @@ func TestChainsAndLoops(t *testing.T) {
 	t.Run("a chain that ends at a private address", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, "http://hopbad.test/")
-		if r.Status != statusFailed || !strings.Contains(r.Reason, "private or local") {
+		if r.Status != scan.StatusFailed || !strings.Contains(r.Reason, "private or local") {
 			t.Errorf("status %s: %s", r.Status, r.Reason)
 		}
 		if hits("hopbad2.test") == 0 {
@@ -305,7 +306,7 @@ func TestRedirectsOfFilesStillGoThroughTheGuard(t *testing.T) {
 			t.Errorf("%d hops reached the site and %d are in the capture", hits, inCapture)
 		}
 		// the page itself is not harmed by a file that never loads
-		if r.Status != statusDone {
+		if r.Status != scan.StatusDone {
 			t.Errorf("status %s: %s", r.Status, r.Reason)
 		}
 	})
@@ -338,7 +339,7 @@ func TestFingerprintPlantsInASharedBrowser(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.host, func(t *testing.T) {
 			t.Parallel()
-			r := scanTest(t, "http://"+c.host+"/", func(cf *config) { cf.remote = b.Address })
+			r := scanTest(t, "http://"+c.host+"/", func(o *scan.Options) { o.Remote = b.Address })
 			if got := techniques(r); len(got[c.technique]) == 0 {
 				t.Errorf("%s: %s was not credited, got %v", c.host, c.technique, got)
 			}

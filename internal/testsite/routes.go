@@ -111,6 +111,18 @@ func (s *Site) route(host string) (http.HandlerFunc, bool) {
 				scriptTag("http://cdn.test/lib.js")+
 				`<form><label>Search <input type="search" name="q"></label></form>`+scriptTag("/app.js")))
 		},
+		// reports how the browser presented itself, to the server and to the page's own script
+		"env.test": func(w http.ResponseWriter, r *http.Request) {
+			s.mu.Lock()
+			s.envHits = append(s.envHits, EnvHit{Path: r.URL.Path, Query: r.URL.RawQuery, GPCHeader: r.Header.Get("Sec-GPC"), UserAgent: r.UserAgent()})
+			s.mu.Unlock()
+			if r.URL.Path == "/report" {
+				noContent(w, r)
+				return
+			}
+			html(w, 200, strings.Replace(page("Environment probe", `<script>fetch('/report?width=' + innerWidth + '&touch=' + ('ontouchstart' in window) + '&gpc=' + navigator.globalPrivacyControl + '&mobile=' + (navigator.userAgentData ? navigator.userAgentData.mobile : 'na') + '&ratio=' + devicePixelRatio);</script>`),
+				`<meta charset="utf-8">`, `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`, 1))
+		},
 		"canvas.test":   vendorPage("Canvas plant", "http://fpvendor.test/canvas.js"),
 		"webgl.test":    vendorPage("WebGL plant", "http://fpvendor.test/webgl.js"),
 		"audio.test":    vendorPage("Audio plant", "http://fpvendor.test/audio.js"),

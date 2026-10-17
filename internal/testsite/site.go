@@ -41,6 +41,7 @@ type Site struct {
 	lns     []net.Listener
 
 	mu       sync.Mutex
+	envHits  []EnvHit
 	hits     map[string][]string
 	counters map[string]int
 	targets  []string
@@ -261,4 +262,20 @@ func pixel(w http.ResponseWriter, _ *http.Request) {
 func noContent(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// EnvHit is a request to env.test, with the headers that say how the browser
+// presented itself.
+type EnvHit struct {
+	Path      string
+	Query     string
+	GPCHeader string
+	UserAgent string
+}
+
+// EnvHits lists the requests env.test has had, in order.
+func (s *Site) EnvHits() []EnvHit {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]EnvHit(nil), s.envHits...)
 }

@@ -13,24 +13,25 @@ import (
 	"time"
 
 	"github.com/muxover/nosy/internal/guard"
+	"github.com/muxover/nosy/internal/scan"
 )
 
 func TestControlStaysSilent(t *testing.T) {
 	t.Parallel()
 	r := scanTest(t, "http://control.test/")
-	if r.Status != statusDone {
+	if r.Status != scan.StatusDone {
 		t.Fatalf("status %s: %s", r.Status, r.Reason)
 	}
 	if r.Score.Total != 0 || r.Score.Label != "Not nosy" {
 		t.Errorf("score = %d %s, want 0 Not nosy; parts %+v", r.Score.Total, r.Score.Label, r.Score.Parts)
 	}
-	if len(r.Techniques) != 0 {
-		t.Errorf("fingerprinting on the control: %+v", r.Techniques)
+	if len(r.Fingerprinting) != 0 {
+		t.Errorf("fingerprinting on the control: %+v", r.Fingerprinting)
 	}
-	if len(r.Recording) != 0 || len(r.KeyHits) != 0 {
-		t.Errorf("replay %v / key capture %v on the control", r.Recording, r.KeyHits)
+	if len(r.SessionRecording) != 0 || len(r.TypedText.Hits) != 0 {
+		t.Errorf("replay %v / key capture %v on the control", r.SessionRecording, r.TypedText.Hits)
 	}
-	if r.FieldsTested < 1 {
+	if r.TypedText.FieldsTested < 1 {
 		t.Error("the control has a search field and it was not typed into")
 	}
 	for _, c := range r.Cookies {
@@ -89,7 +90,7 @@ func TestFingerprintInsideIframe(t *testing.T) {
 		t.Errorf("canvas from the iframe = %v", s)
 	}
 	if found, tracking := company(r, "AdNet"); !found || !tracking {
-		t.Errorf("the tracker requested from inside the iframe was not seen: %+v", r.Parties.Companies)
+		t.Errorf("the tracker requested from inside the iframe was not seen: %+v", r.Companies)
 	}
 }
 
@@ -98,13 +99,13 @@ func TestKeyCapturePlants(t *testing.T) {
 		t.Run(host, func(t *testing.T) {
 			t.Parallel()
 			r := scanTest(t, "http://"+host+"/")
-			if r.FieldsTested < 2 {
-				t.Errorf("fields tested = %d, want 2", r.FieldsTested)
+			if r.TypedText.FieldsTested < 2 {
+				t.Errorf("fields tested = %d, want 2", r.TypedText.FieldsTested)
 			}
-			if len(r.KeyHits) == 0 {
+			if len(r.TypedText.Hits) == 0 {
 				t.Fatalf("typed text was sent to collector.test and not caught; requests: %s", requestURLs(r))
 			}
-			for _, h := range r.KeyHits {
+			for _, h := range r.TypedText.Hits {
 				if !h.ThirdParty || !strings.Contains(h.URL, "collector.test") {
 					t.Errorf("hit = %+v, want a third-party request to collector.test", h)
 				}
@@ -120,8 +121,8 @@ func TestKeyCapturePlants(t *testing.T) {
 	t.Run("keysubmit.test", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, "http://keysubmit.test/")
-		if r.FieldsTested < 2 || len(r.KeyHits) != 0 {
-			t.Errorf("fields %d hits %+v, want typed into fields and nothing sent before submit", r.FieldsTested, r.KeyHits)
+		if r.TypedText.FieldsTested < 2 || len(r.TypedText.Hits) != 0 {
+			t.Errorf("fields %d hits %+v, want typed into fields and nothing sent before submit", r.TypedText.FieldsTested, r.TypedText.Hits)
 		}
 	})
 }
@@ -129,8 +130,8 @@ func TestKeyCapturePlants(t *testing.T) {
 func TestSessionReplayPlant(t *testing.T) {
 	t.Parallel()
 	r := scanTest(t, "http://replay.test/")
-	if len(r.Recording) != 1 || !strings.Contains(r.Requests[r.Recording[0]].URL, "replayvendor.test/recorder.js") {
-		t.Errorf("session recording = %+v", r.Recording)
+	if len(r.SessionRecording) != 1 || !strings.Contains(r.SessionRecording[0].URL, "replayvendor.test/recorder.js") {
+		t.Errorf("session recording = %+v", r.SessionRecording)
 	}
 	if r.Score.Parts.Recording != 10 || !strings.Contains(r.Finding, "session recording") {
 		t.Errorf("recording points %v, finding %q", r.Score.Parts.Recording, r.Finding)
@@ -165,7 +166,7 @@ func TestTrackersScoreByHand(t *testing.T) {
 func TestIdentifierCookiePlant(t *testing.T) {
 	t.Parallel()
 	r := scanTest(t, "http://cookies.test/")
-	ids := map[string]cookie{}
+	ids := map[string]scan.Cookie{}
 	for _, c := range r.Cookies {
 		if c.Identifier {
 			ids[c.Name] = c
@@ -215,7 +216,7 @@ func TestBlockedAndFailedPages(t *testing.T) {
 		t.Run(host, func(t *testing.T) {
 			t.Parallel()
 			r := scanTest(t, "http://"+host+"/")
-			if r.Status != statusBlocked || !strings.Contains(r.Reason, why) {
+			if r.Status != scan.StatusBlocked || !strings.Contains(r.Reason, why) {
 				t.Errorf("status %s reason %q, want blocked: %s", r.Status, r.Reason, why)
 			}
 			if r.Score != nil || r.Finding != "" {
@@ -226,7 +227,7 @@ func TestBlockedAndFailedPages(t *testing.T) {
 	t.Run("down.test", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, "http://down.test/")
-		if r.Status != statusFailed || r.Score != nil {
+		if r.Status != scan.StatusFailed || r.Score != nil {
 			t.Errorf("status %s score %+v, want failed without a score", r.Status, r.Score)
 		}
 	})
@@ -246,25 +247,25 @@ func TestRedirectLandsOnFinalSite(t *testing.T) {
 func TestNeverQuietPageFinishesInTime(t *testing.T) {
 	t.Parallel()
 	r := scanTest(t, "http://slow.test/")
-	if d := r.Capture.Page.Duration; d > 20*time.Second {
+	if d := time.Duration(r.Conditions.DurationMS) * time.Millisecond; d > 20*time.Second {
 		t.Errorf("scan took %s", d)
 	}
-	if !r.Capture.Page.NeverQuiet || !hasNote(r, "did not go quiet") {
-		t.Errorf("never quiet = %v, notes = %v", r.Capture.Page.NeverQuiet, r.Notes)
+	if !r.Page.NeverQuiet || !hasNote(r, "did not go quiet") {
+		t.Errorf("never quiet = %v, notes = %v", r.Page.NeverQuiet, r.Notes)
 	}
-	if r.Status != statusDone {
+	if r.Status != scan.StatusDone {
 		t.Errorf("status %s: %s", r.Status, r.Reason)
 	}
 }
 
 func TestSizeLimit(t *testing.T) {
 	t.Parallel()
-	r := scanTest(t, "http://big.test/", func(c *config) { c.maxBytes = 3 << 20 })
+	r := scanTest(t, "http://big.test/", func(o *scan.Options) { o.MaxBytes = 3 << 20 })
 	if !hasNote(r, "download size limit") {
 		t.Errorf("notes = %v", r.Notes)
 	}
-	if r.Status == statusDone && r.Bytes > 4<<20 {
-		t.Errorf("downloaded %d bytes against a 3 MB limit", r.Bytes)
+	if r.Status == scan.StatusDone && r.Weight.Bytes > 4<<20 {
+		t.Errorf("downloaded %d bytes against a 3 MB limit", r.Weight.Bytes)
 	}
 }
 
@@ -276,7 +277,7 @@ func TestHardStopKillsEverything(t *testing.T) {
 	if d := time.Since(start); d > 24*time.Second {
 		t.Errorf("scan took %s, the hard stop is 20 s", d)
 	}
-	if r.Status != statusFailed || !strings.Contains(r.Reason, "20 seconds") {
+	if r.Status != scan.StatusFailed || !strings.Contains(r.Reason, "20 seconds") {
 		t.Errorf("status %s reason %q", r.Status, r.Reason)
 	}
 	time.Sleep(500 * time.Millisecond)
@@ -317,7 +318,7 @@ func TestRefusesBeforeScanning(t *testing.T) {
 	}
 	for _, in := range inputs {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		o, err := run(ctx, in, config{})
+		o, err := scan.Run(ctx, in, options())
 		cancel()
 		if err == nil {
 			t.Errorf("%s was scanned: %+v", in, o.Status)
@@ -333,7 +334,7 @@ func TestPrivateAddressesNeverReached(t *testing.T) {
 		beforePort = fixture.CanaryPort.Conns()
 	}
 	r := scanTest(t, "http://ssrf.test/")
-	if r.Status != statusDone {
+	if r.Status != scan.StatusDone {
 		t.Fatalf("status %s: %s", r.Status, r.Reason)
 	}
 	if n := fixture.Canary.Conns() - before; n != 0 {
@@ -380,7 +381,7 @@ func TestRedirectsToPrivateAddressAreDropped(t *testing.T) {
 				before = fixture.CanaryPort.Conns()
 			}
 			r := scanTest(t, "http://"+host+"/")
-			if r.Status != statusFailed || !strings.Contains(r.Reason, "private or local") {
+			if r.Status != scan.StatusFailed || !strings.Contains(r.Reason, "private or local") {
 				t.Errorf("status %s reason %q, want failed because the redirect went to a private address", r.Status, r.Reason)
 			}
 			if fixture.CanaryPort != nil && fixture.CanaryPort.Conns() != before {
@@ -391,7 +392,7 @@ func TestRedirectsToPrivateAddressAreDropped(t *testing.T) {
 	t.Run("subredir.test", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, "http://subredir.test/")
-		if r.Status != statusDone || !hasNote(r, "169.254.169.254") {
+		if r.Status != scan.StatusDone || !hasNote(r, "169.254.169.254") {
 			t.Errorf("status %s notes %v", r.Status, r.Notes)
 		}
 		for _, q := range r.Requests {
@@ -416,7 +417,7 @@ func TestCanaryPositiveControl(t *testing.T) {
 	before := fixture.CanaryPort.Conns()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if _, err := run(ctx, "http://ssrf.test/", config{dialer: &guard.Dialer{}}); err != nil {
+	if _, err := scan.Run(ctx, "http://ssrf.test/", func() scan.Options { o := options(); o.Dialer = &guard.Dialer{}; return o }()); err != nil {
 		t.Fatal(err)
 	}
 	if fixture.CanaryPort.Conns() == before {
@@ -433,7 +434,7 @@ func TestRepeatScansAgree(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r, err := runGated("http://trackers.test/", config{})
+			r, err := runGated("http://trackers.test/", options())
 			if err != nil {
 				t.Errorf("scan: %v", err)
 				return
@@ -464,7 +465,7 @@ func TestAnswerBlockedByBrowserStillCounts(t *testing.T) {
 		t.Fatalf("the JSON request was not blocked by the browser as expected:\n%s", requestURLs(r))
 	}
 	if found, tracking := company(r, "AdNet"); !found || !tracking {
-		t.Errorf("the company that answered was not counted: %+v", r.Parties.Companies)
+		t.Errorf("the company that answered was not counted: %+v", r.Companies)
 	}
 }
 
@@ -498,8 +499,8 @@ func TestSharedAndServiceWorkerRequestsAreCaptured(t *testing.T) {
 func TestOwnSearchSuggestionsAreNotScored(t *testing.T) {
 	t.Parallel()
 	r := scanTest(t, "http://keyfirst.test/")
-	if len(r.KeyHits) == 0 || r.KeyHits[0].ThirdParty {
-		t.Fatalf("hits = %+v, want a first-party hit; fields tested %d, requests:\n%s", r.KeyHits, r.FieldsTested, requestURLs(r))
+	if len(r.TypedText.Hits) == 0 || r.TypedText.Hits[0].ThirdParty {
+		t.Fatalf("hits = %+v, want a first-party hit; fields tested %d, requests:\n%s", r.TypedText.Hits, r.TypedText.FieldsTested, requestURLs(r))
 	}
 	if r.Score.Parts.KeyCapture != 0 || r.Score.Total != 0 {
 		t.Errorf("score %d parts %+v, want 0", r.Score.Total, r.Score.Parts)
@@ -510,29 +511,29 @@ func TestReplayListHitAddonAndLabel(t *testing.T) {
 	t.Run("recorder", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, "http://replay.test/")
-		if len(r.Recording) != 1 || r.Score.Parts.Recording != 10 {
-			t.Errorf("recording %+v points %v", r.Recording, r.Score.Parts.Recording)
+		if len(r.SessionRecording) != 1 || r.Score.Parts.Recording != 10 {
+			t.Errorf("recording %+v points %v", r.SessionRecording, r.Score.Parts.Recording)
 		}
 	})
 	t.Run("add-on main tag without the recorder", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, "http://addonmain.test/")
-		if len(r.Recording) != 0 || r.Score.Parts.Recording != 0 {
-			t.Errorf("the add-on's main tag counted: %+v", r.Recording)
+		if len(r.SessionRecording) != 0 || r.Score.Parts.Recording != 0 {
+			t.Errorf("the add-on's main tag counted: %+v", r.SessionRecording)
 		}
 	})
 	t.Run("add-on recorder", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, "http://addonrec.test/")
-		if len(r.Recording) != 1 || !strings.HasSuffix(r.Requests[r.Recording[0]].URL, "/recorder.js") {
-			t.Errorf("recording %+v", r.Recording)
+		if len(r.SessionRecording) != 1 || !strings.HasSuffix(r.SessionRecording[0].URL, "/recorder.js") {
+			t.Errorf("recording %+v", r.SessionRecording)
 		}
 	})
 	t.Run("replay label on a shared CDN hostname", func(t *testing.T) {
 		t.Parallel()
 		r := scanTest(t, "http://labelled.test/")
-		if len(r.Recording) != 0 || r.Score.Total != 0 {
-			t.Errorf("score %d recording %+v, want 0 and none", r.Score.Total, r.Recording)
+		if len(r.SessionRecording) != 0 || r.Score.Total != 0 {
+			t.Errorf("score %d recording %+v, want 0 and none", r.Score.Total, r.SessionRecording)
 		}
 		if found, tracking := company(r, "Shared Hosting"); !found || tracking {
 			t.Errorf("shared hosting listed %v tracking %v, want listed and not tracking", found, tracking)
@@ -561,7 +562,7 @@ func TestThinPagesAreBlockedAfterOneRetry(t *testing.T) {
 		t.Run(host, func(t *testing.T) {
 			t.Parallel()
 			r := scanTest(t, "http://"+host+"/")
-			if r.Status != statusBlocked || !strings.Contains(r.Reason, why) {
+			if r.Status != scan.StatusBlocked || !strings.Contains(r.Reason, why) {
 				t.Fatalf("status %s reason %q, want blocked: %s", r.Status, r.Reason, why)
 			}
 			if r.Score != nil || r.Finding != "" {
@@ -580,14 +581,14 @@ func TestThinPagesAreBlockedAfterOneRetry(t *testing.T) {
 func TestThinFirstVisitThenFullPageIsScored(t *testing.T) {
 	t.Parallel()
 	r := scanTest(t, "http://thinonce.test/")
-	if r.Status != statusDone || r.Score == nil {
+	if r.Status != scan.StatusDone || r.Score == nil {
 		t.Fatalf("status %s reason %q, want a scored result from the second visit", r.Status, r.Reason)
 	}
 	if n := visits("thinonce.test"); n != 2 {
 		t.Errorf("%d visits, want 2", n)
 	}
 	// the planted first page has no text and no bot cookie: it did not finish loading
-	if !hasNote(r, "first visit was blocked") {
+	if !hasNote(r, "first visit did not finish loading") {
 		t.Errorf("notes %q", r.Notes)
 	}
 }
@@ -595,13 +596,13 @@ func TestThinFirstVisitThenFullPageIsScored(t *testing.T) {
 func TestRealPageBehindABotManagerStaysScored(t *testing.T) {
 	t.Parallel()
 	r := scanTest(t, "http://solo.test/")
-	if r.Status != statusDone || r.Score == nil {
+	if r.Status != scan.StatusDone || r.Score == nil {
 		t.Fatalf("status %s reason %q, want scored: no outside company, but a real page", r.Status, r.Reason)
 	}
 	if n := visits("solo.test"); n != 1 {
 		t.Errorf("%d visits, want 1: a scored page is not retried", n)
 	}
-	if r.Capture.Page.TextLen < 2000 {
-		t.Errorf("page text %d", r.Capture.Page.TextLen)
+	if r.Page.TextLen < 2000 {
+		t.Errorf("page text %d", r.Page.TextLen)
 	}
 }

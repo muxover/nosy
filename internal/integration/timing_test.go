@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/muxover/nosy/internal/scan"
 )
 
 // TestTimingOfOneRealScan scans the public page in NOSY_TIMING_URL once, alone,
@@ -26,7 +28,9 @@ func TestTimingOfOneRealScan(t *testing.T) {
 	self0 := selfCPU()
 	stop, done := sampleBrowserCPU()
 	start := time.Now()
-	o, err := run(ctx, target, config{verbose: t.Logf})
+	opts := options()
+	opts.Verbose = t.Logf
+	o, err := scan.Run(ctx, target, opts)
 	wall := time.Since(start)
 	stop()
 	browserCPU, measured := <-done, true
@@ -38,8 +42,8 @@ func TestTimingOfOneRealScan(t *testing.T) {
 	}
 	engine := selfCPU() - self0
 
-	t.Logf("%s: status %s, final %s, %d requests, %d third-party companies", target, o.Status, o.FinalURL, len(o.Requests), len(o.Parties.Companies))
-	t.Logf("wall time %.1f s (the visit itself: %.1f s)", wall.Seconds(), o.Capture.Page.Duration.Seconds())
+	t.Logf("%s: status %s, final %s, %d requests, %d third-party companies", target, o.Status, o.FinalURL, len(o.Requests), len(o.Companies))
+	t.Logf("wall time %.1f s (the visit itself: %.1f s)", wall.Seconds(), float64(o.Conditions.DurationMS)/1000)
 	if measured {
 		t.Logf("CPU: browser %.1f s + engine and test server %.1f s = %.1f CPU-s", browserCPU, engine, browserCPU+engine)
 	} else {
