@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -370,15 +371,33 @@ func TestDoctorFindsTheBrowser(t *testing.T) {
 	}
 }
 
-// subprocess runs the test binary as the nosy command, pointed at the planted pages.
-func subprocess(t *testing.T, tmp string, args ...string) *exec.Cmd {
+// shortTempDir makes a directory with a short path. A browser's sockets live
+// under the temp directory and a Unix socket path holds about a hundred
+// bytes, which the long per-test directories of macOS exceed.
+func shortTempDir(t *testing.T) string {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], args...)
+	base := ""
+	if runtime.GOOS != "windows" {
+		base = "/tmp"
+	}
+	dir, err := os.MkdirTemp(base, "nosy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
+// subprocess runs the test binary as the nosy command, pointed at the planted
+// pages and at a config file of its own. tmp is its temp directory.
+func subprocess(t *testing.T, ctx context.Context, tmp string, args ...string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, os.Args[0], args...)
 	cmd.Env = append(os.Environ(),
 		"NOSY_TEST_RUN_MAIN=1",
 		"NOSY_TEST_HTTP="+fixture.HTTP, "NOSY_TEST_TLS="+fixture.TLS, "NOSY_TEST_SPKI="+fixture.CAPin,
+		"NOSY_TEST_CONFIG="+filepath.Join(tmp, "config.json"),
 		"TMPDIR="+tmp, "TEMP="+tmp, "TMP="+tmp,
-		"XDG_CONFIG_HOME="+filepath.Join(tmp, "config"), "HOME="+tmp, "APPDATA="+filepath.Join(tmp, "config"),
 	)
 	return cmd
 }
@@ -388,8 +407,10 @@ func TestCommandLineEndToEnd(t *testing.T) {
 	need(t)
 	gate <- struct{}{}
 	defer func() { <-gate }()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	var stdout, stderr bytes.Buffer
-	cmd := subprocess(t, t.TempDir(), "scan", "--json", "--quiet", "http://canvas.test/")
+	cmd := subprocess(t, ctx, shortTempDir(t), "scan", "--json", "--quiet", "http://canvas.test/")
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("%v\nstderr: %s", err, stderr.String())
@@ -404,7 +425,7 @@ func TestCommandLineEndToEnd(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	cmd = subprocess(t, t.TempDir(), "scan", "--bogus", "x.example")
+	cmd = subprocess(t, ctx, shortTempDir(t), "scan", "--bogus", "x.example")
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != exitUsage {
@@ -421,9 +442,11 @@ func TestInterruptStopsTheBrowserAndExits130(t *testing.T) {
 	}
 	gate <- struct{}{}
 	defer func() { <-gate }()
-	tmp := t.TempDir()
+	tmp := shortTempDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
 	var stdout, stderr bytes.Buffer
-	cmd := subprocess(t, tmp, "scan", "--json", "http://interrupt.hang.test/")
+	cmd := subprocess(t, ctx, tmp, "scan", "--json", "http://interrupt.hang.test/")
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

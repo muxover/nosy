@@ -101,6 +101,9 @@ func settingNames() string {
 	return strings.Join(names, ", ")
 }
 
+// configFile finds the config file; a test build can point it elsewhere.
+var configFile = defaultConfigPath
+
 func defaultConfigPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {

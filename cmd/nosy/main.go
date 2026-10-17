@@ -78,7 +78,7 @@ func newApp() *app {
 		out:        os.Stdout,
 		err:        os.Stderr,
 		getenv:     os.Getenv,
-		configPath: defaultConfigPath,
+		configPath: configFile,
 		progress:   isTerminal(os.Stderr),
 	}
 }
