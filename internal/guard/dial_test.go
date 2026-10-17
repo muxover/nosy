@@ -91,3 +91,23 @@ func TestDialUnresolvable(t *testing.T) {
 		t.Errorf("got %v, want ErrNoIP", err)
 	}
 }
+
+func TestDialAllowPrivate(t *testing.T) {
+	local, hits := listener(t)
+	d := &Dialer{Timeout: time.Second, AllowPrivate: true}
+	conn, err := d.DialContext(context.Background(), "tcp", local)
+	if err != nil {
+		t.Fatalf("allowed dialer refused the local listener: %v", err)
+	}
+	conn.Close()
+	time.Sleep(50 * time.Millisecond)
+	if hits.Load() != 1 {
+		t.Errorf("local listener got %d connections, want 1", hits.Load())
+	}
+	if err := d.Check(context.Background(), "127.0.0.1"); err != nil {
+		t.Errorf("Check refused a loopback address with AllowPrivate: %v", err)
+	}
+	if err := (&Dialer{}).Check(context.Background(), "127.0.0.1"); !errors.Is(err, ErrBlockedAddr) {
+		t.Errorf("Check without AllowPrivate = %v, want ErrBlockedAddr", err)
+	}
+}

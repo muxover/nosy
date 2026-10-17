@@ -26,6 +26,11 @@ type Dialer struct {
 	Lookup  func(ctx context.Context, host string) ([]netip.Addr, error)
 	Timeout time.Duration
 
+	// AllowPrivate lets the dialer reach private, loopback and link-local
+	// addresses and any port, for a user who scans a site of their own. Names
+	// are still resolved here and the address is still the one dialed.
+	AllowPrivate bool
+
 	// Resolved is told which address a host name was dialed at.
 	Resolved func(host string, ip netip.Addr)
 	// Refused is told about every connection the guard turned away.
@@ -48,14 +53,14 @@ func (d *Dialer) dial(ctx context.Context, host, port string) (net.Conn, error) 
 	if to, ok := testDial(host, port); ok {
 		return d.connect(ctx, to.addr, to.ip, host, false)
 	}
-	if !AllowedPorts[port] {
+	if !d.AllowPrivate && !AllowedPorts[port] {
 		return nil, fmt.Errorf("%w: %s", ErrPort, port)
 	}
 	ips, err := d.resolve(ctx, host)
 	if err != nil {
 		return nil, err
 	}
-	guarded := !guardDisabled()
+	guarded := !guardDisabled() && !d.AllowPrivate
 	if guarded {
 		for _, ip := range ips {
 			if !Allowed(ip) {
@@ -77,6 +82,11 @@ func (d *Dialer) dial(ctx context.Context, host, port string) (net.Conn, error) 
 		}
 	}
 	return nil, last
+}
+
+// Resolve returns the addresses of host as the dialer would dial them.
+func (d *Dialer) Resolve(ctx context.Context, host string) ([]netip.Addr, error) {
+	return d.resolve(ctx, host)
 }
 
 func (d *Dialer) resolve(ctx context.Context, host string) ([]netip.Addr, error) {
@@ -139,7 +149,7 @@ func (d *Dialer) Check(ctx context.Context, host string) error {
 	if err != nil {
 		return err
 	}
-	if guardDisabled() {
+	if guardDisabled() || d.AllowPrivate {
 		return nil
 	}
 	for _, ip := range ips {
