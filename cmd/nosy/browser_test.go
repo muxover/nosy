@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,17 @@ import (
 var (
 	enabled = os.Getenv("NOSY_BROWSER_TESTS") == "1"
 	fixture *testsite.Site
+	gate    = make(chan struct{}, parallel())
 )
+
+// parallel is how many browsers may run at once (NOSY_PARALLEL, at most 3).
+func parallel() int {
+	n, err := strconv.Atoi(os.Getenv("NOSY_PARALLEL"))
+	if err != nil || n < 1 || n > 3 {
+		return 3
+	}
+	return n
+}
 
 func init() {
 	if !enabled {
@@ -55,6 +66,7 @@ func browserHarness(t *testing.T) *harness {
 	need(t)
 	h := newHarness(t)
 	h.env["NOSY_CHROME"] = os.Getenv("NOSY_CHROME")
+	h.gate = gate
 	return h
 }
 
@@ -229,8 +241,13 @@ func TestScanDurationLimit(t *testing.T) {
 	if code != exitFailed || r.Status != scan.StatusFailed || !strings.Contains(r.Reason, "within 10 seconds") {
 		t.Errorf("code %d, %s %q", code, r.Status, r.Reason)
 	}
-	if d := time.Since(start); d > 15*time.Second {
-		t.Errorf("a 10 second limit took %s", d)
+	// the limit is the visit's: starting the browser and collecting what the page
+	// has after the limit take extra time, more on a busy runner
+	if ms := r.Conditions.DurationMS; ms < 9_000 || ms > 14_000 {
+		t.Errorf("the visit lasted %d ms against a 10 second limit", ms)
+	}
+	if d := time.Since(start); d > 30*time.Second {
+		t.Errorf("a 10 second limit took %s in all", d)
 	}
 	if r.Conditions.DurationLimitSeconds != 10 {
 		t.Errorf("conditions = %+v", r.Conditions)
@@ -369,6 +386,8 @@ func subprocess(t *testing.T, tmp string, args ...string) *exec.Cmd {
 func TestCommandLineEndToEnd(t *testing.T) {
 	t.Parallel()
 	need(t)
+	gate <- struct{}{}
+	defer func() { <-gate }()
 	var stdout, stderr bytes.Buffer
 	cmd := subprocess(t, t.TempDir(), "scan", "--json", "--quiet", "http://canvas.test/")
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -400,6 +419,8 @@ func TestInterruptStopsTheBrowserAndExits130(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("a console interrupt cannot be sent to a child process from a test on Windows")
 	}
+	gate <- struct{}{}
+	defer func() { <-gate }()
 	tmp := t.TempDir()
 	var stdout, stderr bytes.Buffer
 	cmd := subprocess(t, tmp, "scan", "--json", "http://interrupt.hang.test/")
@@ -412,7 +433,7 @@ func TestInterruptStopsTheBrowserAndExits130(t *testing.T) {
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	// wait until the browser is on the page, which never finishes loading
-	deadline := time.Now().Add(40 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for len(fixture.Hits("interrupt.hang.test")) == 0 {
 		if time.Now().After(deadline) {
 			t.Fatalf("the browser never reached the page; stderr: %s", stderr.String())

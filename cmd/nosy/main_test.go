@@ -32,6 +32,8 @@ type harness struct {
 	app      *app
 	out, err *bytes.Buffer
 	env      map[string]string
+	// gate, when set, limits how many commands run a browser at once
+	gate chan struct{}
 }
 
 func newHarness(t *testing.T) *harness {
@@ -48,6 +50,10 @@ func newHarness(t *testing.T) *harness {
 }
 
 func (h *harness) run(args ...string) int {
+	if h.gate != nil {
+		h.gate <- struct{}{}
+		defer func() { <-h.gate }()
+	}
 	h.out.Reset()
 	h.err.Reset()
 	return h.app.run(context.Background(), args)

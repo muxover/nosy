@@ -117,7 +117,7 @@ jobs:
             race="-race"
           fi
           echo "race flag: '${race}'"
-          go test -tags nosytest $race -count=1 -v ./... 2>&1 | tee test.log
+          go test -p 1 -timeout 25m -tags nosytest $race -count=1 -v ./... 2>&1 | tee test.log
       - name: Check the browser tests ran
         shell: bash
         run: |
