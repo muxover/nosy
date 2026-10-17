@@ -38,7 +38,7 @@ func StartShared(p *guard.Proxy) (*Shared, error) {
 		return nil, err
 	}
 	if err := writePreferences(profile); err != nil {
-		os.RemoveAll(profile)
+		removeProfile(profile)
 		return nil, err
 	}
 	s := &Shared{Address: fmt.Sprintf("http://127.0.0.1:%d", port)}
@@ -52,7 +52,7 @@ func StartShared(p *guard.Proxy) (*Shared, error) {
 	if err := chromedp.Run(bctx); err != nil {
 		cancelCtx()
 		cancelAlloc()
-		os.RemoveAll(profile)
+		removeProfile(profile)
 		return nil, err
 	}
 	s.starts++
@@ -60,7 +60,7 @@ func StartShared(p *guard.Proxy) (*Shared, error) {
 		cancelCtx()
 		cancelAlloc()
 		killTree(s.cmd)
-		os.RemoveAll(profile)
+		removeProfile(profile)
 	}
 	return s, nil
 }

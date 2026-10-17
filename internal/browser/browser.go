@@ -115,7 +115,7 @@ func Visit(ctx context.Context, target *url.URL, o Options) (*capture.Capture, e
 		if err != nil {
 			return nil, err
 		}
-		defer os.RemoveAll(profile)
+		defer removeProfile(profile)
 		if err := writePreferences(profile); err != nil {
 			return nil, err
 		}
@@ -713,4 +713,16 @@ func writePreferences(profile string) error {
 	}
 	prefs := `{"profile":{"cookie_controls_mode":0,"default_content_setting_values":{"cookies":1}}}`
 	return os.WriteFile(filepath.Join(dir, "Preferences"), []byte(prefs), 0o600)
+}
+
+// removeProfile deletes a profile directory. The browser's helper processes may
+// still be closing files in it just after the browser is killed, so a failed
+// removal is retried for a couple of seconds.
+func removeProfile(dir string) {
+	for i := 0; i < 20; i++ {
+		if os.RemoveAll(dir) == nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
