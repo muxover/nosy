@@ -39,13 +39,15 @@ var instrument string
 const (
 	HardStop    = guard.HardStop
 	quietFor    = 2 * time.Second
-	quietCap    = 8500 * time.Millisecond
 	scrollMax   = 3 * time.Second
 	settle      = 3 * time.Second
 	typeMax     = 2 * time.Second
 	typeSettle  = 1500 * time.Millisecond
 	collectTime = 1500 * time.Millisecond
 	graceTime   = 2500 * time.Millisecond
+
+	// the wait for a quiet network is capped at 8.5 of the default 20 seconds
+	quietShare = 17.0 / 40
 
 	bindingName = "__nosy"
 	maxRequests = 3000
@@ -62,6 +64,13 @@ type Options struct {
 	Remote  string // DevTools address of a browser that stays up; the visit gets a context of its own in it
 	Verbose func(format string, args ...any)
 
+	// Duration is the longest the visit may last; HardStop when zero.
+	Duration time.Duration
+	// Mobile visits as a phone: a narrow, touch-enabled screen and a mobile user agent.
+	Mobile bool
+	// GPC sends the Global Privacy Control signal, as a header and to scripts.
+	GPC bool
+
 	// Progress is told what the visit is doing, for a person watching.
 	Progress func(step string)
 }
@@ -75,6 +84,8 @@ type visit struct {
 	kind map[string]network.ResourceType
 	c    *capture.Capture
 
+	hardStop    time.Duration
+	quietCap    time.Duration
 	mainFrame   cdp.FrameID
 	contextID   cdp.BrowserContextID // this visit's own browser context, empty when it has the browser to itself
 	redirects   map[string]int       // redirects followed per main-frame request
@@ -138,8 +149,14 @@ func Visit(ctx context.Context, target *url.URL, o Options) (*capture.Capture, e
 		}()
 	}
 
+	hardStop := o.Duration
+	if hardStop <= 0 {
+		hardStop = HardStop
+	}
 	v := &visit{
 		o:           o,
+		hardStop:    hardStop,
+		quietCap:    time.Duration(float64(hardStop) * quietShare),
 		contextID:   contextID,
 		redirects:   map[string]int{},
 		cur:         map[string]int{},
@@ -167,7 +184,7 @@ func Visit(ctx context.Context, target *url.URL, o Options) (*capture.Capture, e
 	v.t0 = time.Now()
 	v.c.Page.ScannedAt = v.t0.UTC()
 	v.lastNet.Store(v.t0.UnixNano())
-	watchdog := time.AfterFunc(HardStop, func() {
+	watchdog := time.AfterFunc(v.hardStop, func() {
 		v.mu.Lock()
 		v.c.Page.TimeLimitHit = true
 		v.mu.Unlock()
@@ -239,13 +256,17 @@ func ownContext(allocCtx context.Context, o Options) (tab context.Context, id cd
 }
 
 func allocatorOptions(profile string, port int, o Options) []chromedp.ExecAllocatorOption {
+	w, h := desktop.width, desktop.height
+	if o.Mobile {
+		w, h = phone.width, phone.height
+	}
 	opts := []chromedp.ExecAllocatorOption{
 		chromedp.NoFirstRun,
 		chromedp.NoDefaultBrowserCheck,
 		chromedp.Headless,
 		chromedp.UserDataDir(profile),
 		chromedp.Flag("remote-debugging-port", fmt.Sprint(port)),
-		chromedp.WindowSize(1366, 768),
+		chromedp.WindowSize(w, h),
 		chromedp.Flag("lang", "en-US"),
 		chromedp.Flag("proxy-server", "http://"+o.Proxy.Addr()),
 		// loopback and link-local hosts skip the proxy unless told otherwise
@@ -285,8 +306,48 @@ func allocatorOptions(profile string, port int, o Options) []chromedp.ExecAlloca
 	return opts
 }
 
+// screen is what a visit pretends to be sitting in front of.
+type screen struct {
+	name          string
+	width, height int
+	scale         float64
+	mobile        bool
+}
+
+var (
+	desktop = screen{"desktop", 1366, 768, 1, false}
+	phone   = screen{"mobile", 390, 844, 3, true}
+)
+
+func (s screen) viewport() string { return fmt.Sprintf("%dx%d", s.width, s.height) }
+
+// userAgent is Chrome's reduced user agent for the screen, so every scan of
+// one device looks the same whatever machine runs it.
+func (s screen) userAgent(major string) string {
+	if s.mobile {
+		return "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Mobile Safari/537.36"
+	}
+	return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36"
+}
+
+func (s screen) platform() (name, version string) {
+	if s.mobile {
+		return "Android", "10.0.0"
+	}
+	return "Linux", "6.0"
+}
+
+// gpcScript makes navigator.globalPrivacyControl true, as the signal's own
+// specification has it for a browser that sends the header.
+const gpcScript = `Object.defineProperty(Navigator.prototype, 'globalPrivacyControl', {get: function () { return true; }, configurable: true, enumerable: true});`
+
 func (v *visit) setup(ctx context.Context) error {
-	return chromedp.Run(ctx,
+	scr := desktop
+	if v.o.Mobile {
+		scr = phone
+	}
+	v.c.Page.Device, v.c.Page.Viewport, v.c.Page.GPC = scr.name, scr.viewport(), v.o.GPC
+	actions := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_, product, _, _, _, err := browser.GetVersion().Do(ctx)
 			if err != nil {
@@ -295,21 +356,32 @@ func (v *visit) setup(ctx context.Context) error {
 			v.c.Page.Chromium = product
 			major, _, _ := strings.Cut(strings.TrimPrefix(product, "HeadlessChrome/"), ".")
 			major, _, _ = strings.Cut(strings.TrimPrefix(major, "Chrome/"), ".")
-			ua := "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36"
+			ua := scr.userAgent(major)
 			v.c.Page.UserAgent = ua
 			brands := []*emulation.UserAgentBrandVersion{
 				{Brand: "Chromium", Version: major},
 				{Brand: "Not?A_Brand", Version: "24"},
 			}
+			platform, platformVersion := scr.platform()
+			meta := &emulation.UserAgentMetadata{
+				Brands: brands, FullVersionList: brands,
+				Platform: platform, PlatformVersion: platformVersion, Architecture: "x86", Bitness: "64",
+				Mobile: scr.mobile,
+			}
+			if scr.mobile {
+				meta.Architecture, meta.Bitness, meta.Model = "", "", "K"
+			}
 			return emulation.SetUserAgentOverride(ua).
 				WithAcceptLanguage("en-US,en;q=0.9").
-				WithPlatform("Linux").
-				WithUserAgentMetadata(&emulation.UserAgentMetadata{
-					Brands: brands, FullVersionList: brands,
-					Platform: "Linux", PlatformVersion: "6.0", Architecture: "x86", Bitness: "64",
-				}).Do(ctx)
+				WithPlatform(platform).
+				WithUserAgentMetadata(meta).Do(ctx)
 		}),
-		emulation.SetDeviceMetricsOverride(1366, 768, 1, false),
+		emulation.SetDeviceMetricsOverride(int64(scr.width), int64(scr.height), scr.scale, scr.mobile),
+	}
+	if scr.mobile {
+		actions = append(actions, emulation.SetTouchEmulationEnabled(true).WithMaxTouchPoints(5))
+	}
+	actions = append(actions,
 		emulation.SetLocaleOverride().WithLocale("en-US"),
 		// a visitor's tab is the one in front: the window is visible, and this makes
 		// it the focused one too, so the page sees focus the way a visitor's does
@@ -325,6 +397,16 @@ func (v *visit) setup(ctx context.Context) error {
 			return err
 		}),
 	)
+	if v.o.GPC {
+		actions = append(actions,
+			network.SetExtraHTTPHeaders(network.Headers{"Sec-GPC": "1"}),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				_, err := page.AddScriptToEvaluateOnNewDocument(gpcScript).Do(ctx)
+				return err
+			}),
+		)
+	}
+	return chromedp.Run(ctx, actions...)
 }
 
 func (v *visit) step(s string) {
@@ -420,7 +502,7 @@ func (v *visit) waitQuiet(ctx context.Context) {
 			return
 		case <-tick.C:
 		}
-		if time.Since(v.t0) >= quietCap {
+		if time.Since(v.t0) >= v.quietCap {
 			v.mu.Lock()
 			v.c.Page.NeverQuiet = true
 			v.mu.Unlock()

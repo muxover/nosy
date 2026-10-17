@@ -90,6 +90,9 @@ type Page struct {
 	Duration     time.Duration
 	Chromium     string
 	UserAgent    string
+	Device       string // desktop or mobile
+	Viewport     string
+	GPC          bool // the Global Privacy Control signal was sent
 	SizeCapHit   bool
 	TimeLimitHit bool
 	Crashed      bool // the page's renderer crashed during the visit
