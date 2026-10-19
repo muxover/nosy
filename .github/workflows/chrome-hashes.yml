@@ -1,0 +1,43 @@
+name: Chrome hashes
+
+# Prints the SHA-256 of each Chrome for Testing build Nosy can install, from
+# Google's official download URLs, so a version can be pinned in
+# internal/chrome/pins.go. Run it by hand when the pinned version changes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Chrome for Testing version to pin
+        required: true
+        default: "155.0.8059.39"
+
+permissions:
+  contents: read
+
+jobs:
+  hashes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Newest stable, for reference
+        run: |
+          curl -fsS https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json |
+            python3 -c 'import json,sys; d=json.load(sys.stdin)["channels"]["Stable"]; print("stable:", d["version"])'
+      - name: Hash each platform
+        run: |
+          case "$VERSION" in
+            *[!0-9.]*|"") echo "not a version: $VERSION"; exit 1 ;;
+          esac
+          for p in linux64 mac-arm64 mac-x64 win64 win32; do
+            url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/${p}/chrome-${p}.zip"
+            curl -fsS --retry 3 -o "chrome-${p}.zip" "$url"
+            size=$(stat -c %s "chrome-${p}.zip")
+            sum=$(sha256sum "chrome-${p}.zip" | cut -d' ' -f1)
+            echo "$p $size $sum $url"
+          done | tee hashes.txt
+          echo
+          echo "pins for internal/chrome/pins.go:"
+          awk '{ printf "\t%s: {size: %s, sha256: \"%s\"},\n", $1, $2, $3 }' hashes.txt
