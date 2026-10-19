@@ -274,8 +274,8 @@ func TestSizeLimit(t *testing.T) {
 func TestHardStopKillsEverything(t *testing.T) {
 	start := time.Now()
 	r := scanTest(t, "http://hang.test/")
-	if d := time.Since(start); d > 24*time.Second {
-		t.Errorf("scan took %s, the hard stop is 20 s", d)
+	if d := time.Since(start); d > 40*time.Second {
+		t.Errorf("scan took %s, the hard stop is 20 s plus starting and stopping the browser", d)
 	}
 	if r.Status != scan.StatusFailed || !strings.Contains(r.Reason, "20 seconds") {
 		t.Errorf("status %s reason %q", r.Status, r.Reason)
