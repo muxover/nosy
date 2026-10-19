@@ -5,6 +5,9 @@ name: Chrome hashes
 # internal/chrome/pins.go. Run it by hand when the pinned version changes.
 
 on:
+  push:
+    branches: [build]
+    paths: [.github/workflows/chrome-hashes.yml]
   workflow_dispatch:
     inputs:
       version:
@@ -20,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      VERSION: ${{ inputs.version }}
+      VERSION: ${{ inputs.version || '155.0.8059.39' }}
     steps:
       - name: Newest stable, for reference
         run: |
