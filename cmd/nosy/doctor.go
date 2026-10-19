@@ -66,7 +66,7 @@ func (a *app) doctor(ctx context.Context, args []string) int {
 	in, instErr := a.installer()
 	switch {
 	case instErr != nil:
-		line("Pinned", "no pinned build for this system ("+runtime.GOOS+"/"+runtime.GOARCH+"); Nosy uses a Chrome or Chromium you installed")
+		line("Pinned", "Chrome for Testing has no build for "+runtime.GOOS+"/"+runtime.GOARCH+"; Nosy uses a Chrome or Chromium you installed, or the one NOSY_CHROME names")
 	default:
 		if path, installed := in.Installed(); installed {
 			line("Pinned", "Chrome for Testing "+in.Version+" at "+path)

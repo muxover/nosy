@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -179,20 +180,20 @@ func TestBrowserUsageErrors(t *testing.T) {
 func TestBrowserOnAnUnsupportedSystem(t *testing.T) {
 	h := newHarness(t)
 	h.app.installer = func() (*chrome.Installer, error) {
-		_, err := chrome.CurrentPlatform()
-		if err == nil {
-			return nil, os.ErrInvalid
-		}
-		return nil, err
+		return nil, fmt.Errorf("%w (linux/arm64): install Chrome or Chromium from your system's packages and Nosy will find it, or set NOSY_CHROME", chrome.ErrUnsupported)
 	}
-	// on a supported system CurrentPlatform works; the error path is the installer failing
 	if code := h.run("browser", "install"); code != exitFailed {
 		t.Errorf("install: code %d", code)
+	}
+	if say := h.err.String(); !strings.Contains(say, "linux/arm64") || !strings.Contains(say, "Chrome or Chromium") {
+		t.Errorf("install says %q, want the system named and a way forward", say)
 	}
 	if code := h.run("browser", "path"); code != exitFailed {
 		t.Errorf("path: code %d", code)
 	}
-	if code := h.run("doctor"); !strings.Contains(h.out.String(), "Pinned") || code == exitUsage {
-		t.Errorf("doctor: code %d\n%s", code, h.out.String())
+	h.out.Reset()
+	h.run("doctor")
+	if !strings.Contains(h.out.String(), "Chrome for Testing has no build for") {
+		t.Errorf("doctor does not say plainly that there is no pinned build:\n%s", h.out.String())
 	}
 }
