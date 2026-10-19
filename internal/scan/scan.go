@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strings"
@@ -265,6 +266,7 @@ func Build(target *url.URL, c *capture.Capture, o Options) *Result {
 			Locale:               "en-US",
 			ConsentMode:          "not touched",
 			GPC:                  c.Page.GPC,
+			AllowPrivate:         o.AllowPrivate,
 			DurationLimitSeconds: int(limit.Seconds()),
 			DurationMS:           c.Page.Duration.Milliseconds(),
 			Nosy:                 o.Version,
@@ -339,6 +341,7 @@ func Build(target *url.URL, c *capture.Capture, o Options) *Result {
 
 	r.Storage = storage(c, r.Site, rules.Index)
 	r.Refused = refused(c)
+	r.Blocked = blocked(c)
 	r.Fingerprinting = detect.Fingerprinting(c.APICalls)
 	for _, i := range detect.Replay(reqs, rules.Vendors) {
 		r.SessionRecording = append(r.SessionRecording, Evidence{Request: i, URL: reqs[i].URL, Frame: reqs[i].Frame})
@@ -414,10 +417,50 @@ func visitNotes(c *capture.Capture, limit time.Duration) []string {
 	if c.Page.SizeCapHit {
 		n = append(n, "the download size limit was reached and the scan was stopped")
 	}
+	l := c.Proxy.Limits
+	if l.RequestCap > 0 {
+		n = append(n, fmt.Sprintf("%d answer(s) passed the %d MB limit for one request and were cut short", l.RequestCap, guard.MaxRequestBytes>>20))
+	}
+	if l.Connections > 0 {
+		n = append(n, fmt.Sprintf("%d request(s) were refused because %d connections were already open", l.Connections, guard.MaxConns))
+	}
+	if l.Idle > 0 {
+		n = append(n, fmt.Sprintf("%d connection(s) were closed because the server sent nothing for %d seconds", l.Idle, int(guard.IdleTimeout.Seconds())))
+	}
+	if l.SlowAnswers > 0 {
+		n = append(n, fmt.Sprintf("%d request(s) got no answer within %d seconds and were given up", l.SlowAnswers, int(guard.HeaderTimeout.Seconds())))
+	}
 	if hosts := pageRefusals(c); len(hosts) > 0 {
 		n = append(n, fmt.Sprintf("the safety guard refused %d destination(s) the page asked for: %s", len(hosts), strings.Join(hosts, ", ")))
 	}
 	return n
+}
+
+// blocked lists the page's attempts to reach the user's machine, network or a
+// cloud metadata service, with the frame that made each.
+func blocked(c *capture.Capture) []BlockedAttempt {
+	frame := map[string]string{}
+	for _, r := range c.Requests {
+		if _, ok := frame[r.Host]; !ok || frame[r.Host] == "" {
+			frame[r.Host] = r.Frame
+		}
+	}
+	var out []BlockedAttempt
+	seen := map[string]bool{}
+	for _, rf := range c.Proxy.Refused {
+		f, asked := frame[rf.Host]
+		if !asked || rf.Kind == "" || rf.Kind == guard.Public {
+			continue
+		}
+		addr := net.JoinHostPort(rf.Host, rf.Port)
+		if seen[addr] {
+			continue
+		}
+		seen[addr] = true
+		out = append(out, BlockedAttempt{Address: addr, Kind: string(rf.Kind), Frame: f})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
+	return out
 }
 
 // pageRefusals lists refused destinations that a request on the page asked

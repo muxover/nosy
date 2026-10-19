@@ -16,7 +16,7 @@ import (
 type Technique struct {
 	Name    string   `json:"technique"`
 	Scripts []string `json:"scripts"`
-	// Frames are the origins of the frames the calls ran in.
+	// Frames are the addresses (scheme and host) of the frames the calls ran in.
 	Frames  []string `json:"frames,omitempty"`
 	Calls   int      `json:"calls"`
 	Details []string `json:"details,omitempty"`

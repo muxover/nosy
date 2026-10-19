@@ -17,7 +17,7 @@ type Request struct {
 	MIME      string `json:"mime,omitempty"`
 	Bytes     int64  `json:"bytes"`
 	Initiator string `json:"initiator,omitempty"`
-	Frame     string `json:"frame,omitempty"` // origin of the document that made the request
+	Frame     string `json:"frame,omitempty"` // address (scheme and host) of the frame that made the request
 	Failed    string `json:"failed,omitempty"`
 	Refused   bool   `json:"refused,omitempty"`
 	Answered  bool   `json:"answered,omitempty"` // the server replied, but the browser blocked the page from reading it
@@ -62,7 +62,7 @@ type Cookie struct {
 type APICall struct {
 	Technique string `json:"technique"` // canvas, webgl, audio, fonts
 	Script    string `json:"script"`
-	Frame     string `json:"frame,omitempty"` // origin of the frame the call ran in
+	Frame     string `json:"frame,omitempty"` // address (scheme and host) of the frame the call ran in
 	Detail    string `json:"detail,omitempty"`
 }
 

@@ -57,6 +57,7 @@ type Result struct {
 	Requests         []capture.Request  `json:"requests"`
 	Cookies          []Cookie           `json:"cookies"`
 	Refused          Refused            `json:"refused"`
+	Blocked          []BlockedAttempt   `json:"blocked,omitempty"`
 	Storage          []StorageOrigin    `json:"storage"`
 	Fingerprinting   []detect.Technique `json:"fingerprinting"`
 	SessionRecording []Evidence         `json:"session_recording"`
@@ -82,6 +83,9 @@ type Conditions struct {
 	GPC                  bool   `json:"gpc"`
 	DurationLimitSeconds int    `json:"duration_limit_seconds"`
 	DurationMS           int64  `json:"duration_ms"`
+	// AllowPrivate is true when the scan was allowed into private and local
+	// addresses. Such a result is never shared.
+	AllowPrivate bool `json:"allow_private"`
 	// WebGL is what scripts got when they asked for it: hardware, software or none.
 	WebGL string `json:"webgl"`
 	// StorageCutShort is true when the storage read ran out of time and the
@@ -90,6 +94,16 @@ type Conditions struct {
 	Nosy            string   `json:"nosy"`
 	Rules           string   `json:"rules"`
 	Settings        []string `json:"settings"`
+}
+
+// BlockedAttempt is a destination on the user's own machine or network, or a
+// cloud metadata service, that the page tried to reach and the guard refused.
+type BlockedAttempt struct {
+	Address string `json:"address"` // host:port as the page asked for it
+	Kind    string `json:"kind"`    // loopback, private, link-local, cloud metadata, local name and the like
+	// Frame is the address (scheme and host) of the frame that asked. A
+	// sandboxed frame's own origin is opaque, so its address is what is known.
+	Frame string `json:"frame,omitempty"`
 }
 
 // Refused is what the page asked for that Nosy never allows: new windows,
@@ -146,7 +160,8 @@ type Cookie struct {
 type Evidence struct {
 	Request int    `json:"request"`
 	URL     string `json:"url"`
-	// Frame is the origin of the document that made the request.
+	// Frame is the address (scheme and host) of the frame that made the request;
+	// a sandboxed frame has an opaque origin, so its address is what is known.
 	Frame string `json:"frame,omitempty"`
 }
 

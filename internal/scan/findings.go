@@ -194,6 +194,21 @@ func (r *Result) serviceWorkerCount() int {
 
 // refusedFindings reports what the page asked for that Nosy does not allow.
 func refusedFindings(r *Result, add func(id, label, text string, evidence ...string)) {
+	if n := len(r.Blocked); n > 0 {
+		var kinds, ev []string
+		for _, b := range r.Blocked {
+			if !contains(kinds, b.Kind) {
+				kinds = append(kinds, b.Kind)
+			}
+			e := b.Address + " (" + b.Kind + ")"
+			if b.Frame != "" {
+				e += " from " + b.Frame
+			}
+			ev = append(ev, e)
+		}
+		add("local-network", Observed,
+			fmt.Sprintf("The page tried to reach your local network: %d %s (%s). The guard refused every one.", n, plural(n, "address", "addresses"), strings.Join(kinds, ", ")), ev...)
+	}
 	if n := max(len(r.Refused.Popups), r.Refused.PopupsClosed); n > 0 {
 		var ev []string
 		for _, p := range r.Refused.Popups {
@@ -210,4 +225,13 @@ func refusedFindings(r *Result, add func(id, label, text string, evidence ...str
 		add("local-addresses", Observed,
 			fmt.Sprintf("The page tried to open %d %s on this machine. The browser refused them.", n, plural(n, "address", "addresses")), r.Refused.LocalAddresses...)
 	}
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

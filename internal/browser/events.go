@@ -69,7 +69,15 @@ func (v *visit) handler(ctx context.Context, session string) func(ev any) {
 			})
 		case *network.EventWebSocketCreated:
 			v.touch()
-			v.addRequest(key(e.RequestID), e.URL, "GET", "WebSocket", "", false)
+			initiator := ""
+			if e.Initiator != nil {
+				initiator = initiatorURL(e.Initiator)
+			}
+			if id := v.addRequest(key(e.RequestID), e.URL, "GET", "WebSocket", initiator, false); id >= 0 {
+				v.mu.Lock()
+				v.reqs[id].Frame = originOf(initiator)
+				v.mu.Unlock()
+			}
 		case *network.EventWebSocketHandshakeResponseReceived:
 			v.update(key(e.RequestID), func(r *capture.Request) { r.Status = int(e.Response.Status) })
 		case *network.EventWebSocketFrameSent:
@@ -151,7 +159,14 @@ func (v *visit) onRequest(key string, e *network.EventRequestWillBeSent) {
 	id := v.addRequest(key, e.Request.URL, e.Request.Method, string(e.Type), initiator, main)
 	if id >= 0 {
 		v.mu.Lock()
-		v.reqs[id].Frame = originOf(e.DocumentURL)
+		// a document is asked for by the frame that holds it
+		frame := originOf(e.DocumentURL)
+		if e.Type == network.ResourceTypeDocument && e.DocumentURL == e.Request.URL {
+			if o := originOf(initiator); o != "" {
+				frame = o
+			}
+		}
+		v.reqs[id].Frame = frame
 		v.mu.Unlock()
 	}
 	if id >= 0 && len(e.Request.PostDataEntries) > 0 {
