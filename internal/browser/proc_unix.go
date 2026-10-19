@@ -14,6 +14,13 @@ import (
 func confine(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	exitWithParent(cmd.SysProcAttr)
+	// when the context ends, the whole group goes, not just the main process
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 }
 
 // killTree kills the browser and every process it started.

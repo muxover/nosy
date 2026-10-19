@@ -28,6 +28,7 @@ import (
 	"github.com/chromedp/chromedp"
 
 	"github.com/muxover/nosy/internal/capture"
+	"github.com/muxover/nosy/internal/chrome"
 	"github.com/muxover/nosy/internal/guard"
 )
 
@@ -265,6 +266,7 @@ func allocatorOptions(profile string, port int, o Options) []chromedp.ExecAlloca
 		chromedp.NoDefaultBrowserCheck,
 		chromedp.Headless,
 		chromedp.UserDataDir(profile),
+		noSandboxOff,
 		chromedp.Flag("remote-debugging-port", fmt.Sprint(port)),
 		chromedp.WindowSize(w, h),
 		chromedp.Flag("lang", "en-US"),
@@ -351,6 +353,9 @@ func (v *visit) setup(ctx context.Context) error {
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_, product, _, _, _, err := browser.GetVersion().Do(ctx)
 			if err != nil {
+				return err
+			}
+			if err := chrome.CheckVersion(product); err != nil {
 				return err
 			}
 			v.c.Page.Chromium = product
@@ -666,6 +671,14 @@ func (v *visit) collect(ctx context.Context, budget time.Duration) {
 	var finalURL string
 	_ = chromedp.Run(cctx, chromedp.Location(&finalURL))
 
+	// a visit that hit its time or size limit has no time to read storage
+	v.mu.Lock()
+	over := v.c.Page.TimeLimitHit || v.c.Page.SizeCapHit || v.c.Page.Crashed
+	v.mu.Unlock()
+	if !over {
+		v.collectStorage(ctx)
+	}
+
 	v.fetchPostData(cctx)
 
 	v.mu.Lock()
@@ -808,3 +821,7 @@ func removeProfile(dir string) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// noSandboxOff keeps the sandbox on. chromedp adds --no-sandbox by itself when
+// the process runs as root, unless the flag is set, to false, first.
+var noSandboxOff = chromedp.Flag("no-sandbox", false)
