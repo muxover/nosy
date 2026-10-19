@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -34,13 +35,13 @@ func TestHelpAndVersion(t *testing.T) {
 			t.Errorf("%v: code %d, output %q", args, code, h.out.String())
 		}
 	}
-	for _, c := range []string{"scan", "check", "config", "doctor"} {
+	for _, c := range []string{"scan", "check", "browser", "config", "doctor"} {
 		if !strings.Contains(h.out.String(), c) {
 			t.Errorf("help does not list %s", c)
 		}
 	}
 	for _, line := range strings.Split(h.out.String(), "\n") {
-		for _, name := range []string{"report", "rules", "browser", "serve"} {
+		for _, name := range []string{"report", "rules", "serve"} {
 			if f := strings.Fields(line); len(f) > 0 && f[0] == name {
 				t.Errorf("help lists %s, which does not exist yet", name)
 			}
@@ -51,7 +52,7 @@ func TestHelpAndVersion(t *testing.T) {
 			t.Errorf("%v: code %d, output %q", args, code, h.out.String())
 		}
 	}
-	for _, c := range []string{"scan", "check", "config", "doctor"} {
+	for _, c := range []string{"scan", "check", "browser", "config", "doctor"} {
 		if code := h.run("help", c); code != exitOK || !strings.Contains(h.out.String(), "Usage: nosy "+c) {
 			t.Errorf("help %s: code %d, output %q", c, code, h.out.String())
 		}
@@ -63,7 +64,7 @@ func TestHelpAndVersion(t *testing.T) {
 
 func TestUnknownCommandIsUsageError(t *testing.T) {
 	h := newHarness(t)
-	for _, c := range []string{"nope", "report", "rules", "browser", "serve"} {
+	for _, c := range []string{"nope", "report", "rules", "serve"} {
 		if code := h.run(c); code != exitUsage || !strings.Contains(h.err.String(), "unknown command") || h.out.Len() != 0 {
 			t.Errorf("%s: code %d, stderr %q", c, code, h.err.String())
 		}
@@ -167,7 +168,7 @@ func TestDoctorReportsAMissingBrowser(t *testing.T) {
 		t.Errorf("code %d", code)
 	}
 	out := h.out.String()
-	for _, want := range []string{"Nosy", "System", runtime.GOOS + "/" + runtime.GOARCH, "Config", "Chrome", "not found", "fix:", "NOSY_CHROME", "Rules", "none yet"} {
+	for _, want := range []string{"Nosy", "System", runtime.GOOS + "/" + runtime.GOARCH, "Config", "Pinned", "Browser", "not found", "fix:", "NOSY_CHROME", "nosy browser install", "Rules", "none yet"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor output lacks %q:\n%s", want, out)
 		}
@@ -422,5 +423,49 @@ func TestResultJSONIsStable(t *testing.T) {
 		if _, ok := m["conditions"].(map[string]any)[key]; !ok {
 			t.Errorf("conditions lack %q", key)
 		}
+	}
+}
+
+func TestDoctorNamesMissingLibrariesAndTheCommandToInstallThem(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("shared libraries are checked on Linux")
+	}
+	h := newHarness(t)
+	fakeChrome(t, h)
+	h.app.missingLibs = func(context.Context, string) ([]string, error) {
+		return []string{"libgbm.so.1", "libnss3.so", "libmystery.so.9"}, nil
+	}
+	for family, want := range map[string]string{
+		"ID=ubuntu\nID_LIKE=debian\n": "sudo apt-get install -y libgbm1 libnss3",
+		"ID=fedora\n":                 "sudo dnf install -y mesa-libgbm nss",
+		"ID=arch\n":                   "sudo pacman -S --needed mesa nss",
+		"ID=alpine\n":                 "package manager",
+	} {
+		h.app.osRelease = func() string { return family }
+		if code := h.run("doctor"); code != exitFailed {
+			t.Errorf("%q: code %d", family, code)
+		}
+		out := h.out.String()
+		if !strings.Contains(out, "Libraries missing: libgbm.so.1, libnss3.so, libmystery.so.9") || !strings.Contains(out, "fix: ") || !strings.Contains(out, want) {
+			t.Errorf("%q: doctor output lacks %q:\n%s", family, want, out)
+		}
+		if strings.Contains(out, "Sandbox") {
+			t.Errorf("doctor tried to start a browser that lacks libraries:\n%s", out)
+		}
+	}
+}
+
+func TestDoctorSaysWhenTheBrowserDoesNotStart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script stands in for the browser")
+	}
+	h := newHarness(t)
+	script := filepath.Join(t.TempDir(), "chrome")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.env["NOSY_CHROME"] = script
+	if code := h.run("doctor"); code != exitFailed || !strings.Contains(h.out.String(), "does not start") || !strings.Contains(h.out.String(), "fix: run it by hand") {
+		t.Errorf("code %d\n%s", code, h.out.String())
 	}
 }

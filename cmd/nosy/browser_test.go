@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/muxover/nosy/internal/check"
+	"github.com/muxover/nosy/internal/chrome"
 	"github.com/muxover/nosy/internal/scan"
 	"github.com/muxover/nosy/internal/testsite"
 )
@@ -110,6 +111,9 @@ func TestScanJSONOnAPlantedPage(t *testing.T) {
 		t.Errorf("findings = %+v", r.Findings)
 	}
 	c := r.Conditions
+	if c.BrowserSource != "env" || c.BrowserPinned {
+		t.Errorf("browser source %q pinned %v, want the NOSY_CHROME browser", c.BrowserSource, c.BrowserPinned)
+	}
 	if c.Device != "desktop" || c.Viewport != "1366x768" || c.GPC || c.DurationLimitSeconds != 20 || c.DurationMS <= 0 ||
 		c.Nosy != nosyVersion() || c.Rules != "none" || c.Country != "unknown" || !strings.HasPrefix(c.Browser, "Chrome/") ||
 		c.ConsentMode != "not touched" || len(c.Settings) == 0 {
@@ -351,7 +355,7 @@ func TestDoctorFindsTheBrowser(t *testing.T) {
 	h := browserHarness(t)
 	code := h.run("doctor")
 	out := h.out.String()
-	for _, want := range []string{"Chrome", os.Getenv("NOSY_CHROME"), "Chrome/", "Rules     none yet"} {
+	for _, want := range []string{"Browser", os.Getenv("NOSY_CHROME"), "NOSY_CHROME names it", "Version", "Chrome/", "Libraries", "Rules"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor lacks %q:\n%s", want, out)
 		}
@@ -437,9 +441,6 @@ func TestCommandLineEndToEnd(t *testing.T) {
 func TestInterruptStopsTheBrowserAndExits130(t *testing.T) {
 	t.Parallel()
 	need(t)
-	if runtime.GOOS == "windows" {
-		t.Skip("a console interrupt cannot be sent to a child process from a test on Windows")
-	}
 	gate <- struct{}{}
 	defer func() { <-gate }()
 	tmp := shortTempDir(t)
@@ -448,6 +449,7 @@ func TestInterruptStopsTheBrowserAndExits130(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cmd := subprocess(t, ctx, tmp, "scan", "--json", "http://interrupt.hang.test/")
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	interruptable(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -467,8 +469,8 @@ func TestInterruptStopsTheBrowserAndExits130(t *testing.T) {
 	if len(profiles) == 0 {
 		t.Fatalf("no temp profile while the scan runs (looked in %s)", tmp)
 	}
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
-		t.Fatal(err)
+	if err := sendInterrupt(cmd); err != nil {
+		t.Fatalf("could not send Ctrl+C: %v", err)
 	}
 	select {
 	case err := <-done:
@@ -488,26 +490,92 @@ func TestInterruptStopsTheBrowserAndExits130(t *testing.T) {
 	if left, _ := filepath.Glob(filepath.Join(tmp, "nosy-profile-*")); len(left) != 0 {
 		t.Errorf("temp profiles left behind: %v", left)
 	}
-	if runtime.GOOS == "linux" {
-		time.Sleep(300 * time.Millisecond)
-		if left := processesUsing(tmp); len(left) != 0 {
-			t.Errorf("browser processes left behind: %v", left)
+	// the browser's helpers may take a moment to follow it out
+	var left []string
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(250 * time.Millisecond) {
+		if left = processesUsing(filepath.Base(tmp)); len(left) == 0 || time.Now().After(deadline) {
+			break
 		}
+	}
+	if len(left) != 0 {
+		t.Errorf("browser processes left behind: %v", left)
 	}
 }
 
-// processesUsing lists processes whose command line mentions dir.
-func processesUsing(dir string) []string {
+// processesUsing lists the processes whose command line mentions name: the
+// browser and its helpers all carry the temp directory the command was given.
+func processesUsing(name string) []string {
 	var out []string
-	files, _ := filepath.Glob("/proc/[0-9]*/cmdline")
-	for _, f := range files {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			continue
+	switch runtime.GOOS {
+	case "linux":
+		files, _ := filepath.Glob("/proc/[0-9]*/cmdline")
+		for _, f := range files {
+			if b, err := os.ReadFile(f); err == nil && strings.Contains(string(b), name) {
+				out = append(out, strings.ReplaceAll(strings.TrimRight(string(b), "\x00"), "\x00", " "))
+			}
 		}
-		if strings.Contains(string(b), dir) {
-			out = append(out, strings.ReplaceAll(strings.TrimRight(string(b), "\x00"), "\x00", " "))
+	case "windows":
+		ps := fmt.Sprintf(`Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf('%s', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.Name -notlike 'powershell*' } | ForEach-Object { $_.Name + ' ' + $_.ProcessId }`, strings.ReplaceAll(name, "'", "''"))
+		b, _ := exec.Command("powershell", "-NoProfile", "-Command", ps).Output()
+		for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				out = append(out, l)
+			}
+		}
+	default:
+		b, _ := exec.Command("ps", "-axww", "-o", "pid=,command=").Output()
+		for _, l := range strings.Split(string(b), "\n") {
+			if strings.Contains(l, name) && !strings.Contains(l, "ps -axww") {
+				out = append(out, strings.TrimSpace(l))
+			}
 		}
 	}
 	return out
+}
+
+// With nothing set but the pinned build installed (the CI jobs that run
+// `nosy browser install` first), a scan uses it and says so.
+func TestThePinnedBuildIsUsedWhenNothingElseIsSet(t *testing.T) {
+	t.Parallel()
+	need(t)
+	if os.Getenv("NOSY_EXPECT_PINNED") != "1" {
+		t.Skip("set NOSY_EXPECT_PINNED=1 after `nosy browser install` to test the pinned build")
+	}
+	gate <- struct{}{}
+	defer func() { <-gate }()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	run := func(args ...string) (string, string, error) {
+		var stdout, stderr bytes.Buffer
+		cmd := subprocess(t, ctx, shortTempDir(t), args...)
+		// the real environment but for the browser the other tests point at
+		var env []string
+		for _, kv := range cmd.Env {
+			if !strings.HasPrefix(kv, "NOSY_CHROME=") {
+				env = append(env, kv)
+			}
+		}
+		cmd.Env = env
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		return stdout.String(), stderr.String(), err
+	}
+
+	out, errOut, err := run("browser", "path")
+	if err != nil || !strings.Contains(out, chrome.Version) || !strings.Contains(out, "Nosy's own Chrome for Testing "+chrome.Version) {
+		t.Fatalf("browser path: %v\nstdout: %s\nstderr: %s", err, out, errOut)
+	}
+	out, errOut, err = run("scan", "--json", "--quiet", "http://canvas.test/")
+	if err != nil {
+		t.Fatalf("scan: %v\nstderr: %s", err, errOut)
+	}
+	var r scan.Result
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	major, _, _ := strings.Cut(chrome.Version, ".")
+	c := r.Conditions
+	if c.BrowserSource != "pinned" || !c.BrowserPinned || !strings.HasPrefix(c.Browser, "Chrome/"+major+".") || r.Status != scan.StatusDone || r.Score == nil || r.Score.Total != 5 {
+		t.Errorf("status %s score %+v conditions %+v", r.Status, r.Score, c)
+	}
 }
