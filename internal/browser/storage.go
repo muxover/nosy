@@ -56,7 +56,7 @@ type storageDump struct {
 // script in a world of its own in the frame sees that frame's storage, which
 // for a third-party frame is the storage partitioned to this site.
 func (v *visit) collectStorage(ctx context.Context) {
-	cctx, cancel := context.WithTimeout(ctx, storageBudget)
+	cctx, cancel := context.WithTimeout(ctx, budgetFor(v.target, storageBudget))
 	defer cancel()
 
 	var frames []cdp.FrameID
@@ -82,6 +82,9 @@ func (v *visit) collectStorage(ctx context.Context) {
 	}))
 	if err != nil {
 		v.logf("storage: frames: %v", err)
+		v.mu.Lock()
+		v.c.Page.StorageCutShort = true
+		v.mu.Unlock()
 		return
 	}
 
