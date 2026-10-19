@@ -45,6 +45,7 @@ const (
 	settle      = 3 * time.Second
 	typeMax     = 2 * time.Second
 	typeSettle  = 1500 * time.Millisecond
+	answerWait  = 2 * time.Second
 	collectTime = 1500 * time.Millisecond
 	graceTime   = 2500 * time.Millisecond
 
@@ -464,8 +465,10 @@ func (v *visit) run(ctx context.Context, target *url.URL) {
 	v.scroll(ctx)
 	sleep(ctx, settle)
 	v.step("Typing into the fields, without sending")
+	typed := time.Since(v.t0).Milliseconds()
 	v.typeIntoFields(ctx)
 	sleep(ctx, typeSettle)
+	v.waitAnswers(ctx, typed)
 	v.step("Collecting what the page did")
 	// after the hard stop or the size cap the visit is over but the browser is
 	// still there: take what the page has, within a short fixed grace
@@ -505,6 +508,32 @@ func (v *visit) navigate(ctx context.Context, target *url.URL) bool {
 		v.c.Page.MainError = err.Error()
 	}
 	return false
+}
+
+// waitAnswers gives the requests made since since (milliseconds into the
+// visit) a little longer to be answered on a slow machine: a request that is
+// still waiting when the page is read cannot show what it carried. It never
+// runs into the time the hard stop leaves for collecting.
+func (v *visit) waitAnswers(ctx context.Context, since int64) {
+	deadline := v.t0.Add(v.hardStop - collectTime - graceTime)
+	if d := time.Now().Add(answerWait); d.Before(deadline) {
+		deadline = d
+	}
+	for time.Now().Before(deadline) && ctx.Err() == nil && v.waiting(since) > 0 {
+		sleep(ctx, 100*time.Millisecond)
+	}
+}
+
+func (v *visit) waiting(since int64) int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	n := 0
+	for _, r := range v.reqs {
+		if r.StartMS >= since && r.Status == 0 && r.Failed == "" && !r.Refused && r.Type != "WebSocket" && r.Type != "EventSource" {
+			n++
+		}
+	}
+	return n
 }
 
 func sleep(ctx context.Context, d time.Duration) {
