@@ -76,7 +76,7 @@ func findings(r *Result, p detect.Parties) []Finding {
 				}
 			}
 			add("third-party-storage", Observed,
-				fmt.Sprintf("%d of them %s third-party frames, each with storage of its own.", third, plural(third, "is a", "are")), tp...)
+				fmt.Sprintf("%d of them %s, with storage of its own.", third, plural(third, "is a third-party frame", "are third-party frames")), tp...)
 		}
 		if ids > 0 {
 			var which []string
