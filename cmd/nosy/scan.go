@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/muxover/nosy/internal/browser"
+	"github.com/muxover/nosy/internal/chrome"
 	"github.com/muxover/nosy/internal/guard"
 	"github.com/muxover/nosy/internal/scan"
 	"github.com/muxover/nosy/internal/site"
@@ -35,8 +35,8 @@ Exit codes: 0 scanned, 1 the scan failed or was blocked, 2 wrong usage, 130 inte
 const allowPrivateWarning = `warning: --allow-private is on. Nosy will connect to private, loopback and link-local
 addresses, including this machine and your network. Scan only sites you own.`
 
-const noChromeHelp = `Install Google Chrome or Chromium, or set NOSY_CHROME (or "nosy config set chrome") to its path.
-"nosy browser install" arrives in a later version.`
+const noChromeHelp = `Run "nosy browser install" to download Nosy's own Chrome for Testing, install Google Chrome or
+Chromium, or point NOSY_CHROME (or "nosy config set chrome") at a Chromium browser.`
 
 // scanSettings are the options a scan command line and the config add up to.
 type scanSettings struct {
@@ -77,7 +77,7 @@ func (a *app) scan(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.usageError("scan", err)
 	}
-	chrome, err := a.findChrome(cur)
+	choice, err := a.chooseBrowser(cur)
 	if err != nil {
 		return a.noBrowser(err)
 	}
@@ -86,12 +86,13 @@ func (a *app) scan(ctx context.Context, args []string) int {
 		fmt.Fprintln(a.err, allowPrivateWarning)
 	}
 	opts := scan.Options{
-		Version:      nosyVersion(),
-		Chrome:       chrome,
-		Duration:     ss.duration,
-		Mobile:       ss.mobile,
-		GPC:          ss.gpc,
-		AllowPrivate: *allowPrivate,
+		Version:       nosyVersion(),
+		Chrome:        choice.Path,
+		BrowserSource: choice.Source,
+		Duration:      ss.duration,
+		Mobile:        ss.mobile,
+		GPC:           ss.gpc,
+		AllowPrivate:  *allowPrivate,
 	}
 	var st *status
 	if a.progress && !*quiet {
@@ -157,14 +158,14 @@ func resolveScan(cur settings, set map[string]bool, durationFlag, deviceFlag str
 	return ss, nil
 }
 
-// findChrome looks for the browser: NOSY_CHROME, then the config, then the
-// usual install places.
-func (a *app) findChrome(cur settings) (string, error) {
-	pref := a.getenv("NOSY_CHROME")
-	if pref == "" {
-		pref = cur.Chrome
+// chooseBrowser picks the browser: the chrome setting, NOSY_CHROME, Nosy's
+// pinned build, then a Chrome or Chromium found on the machine.
+func (a *app) chooseBrowser(cur settings) (chrome.Choice, error) {
+	in, err := a.installer()
+	if err != nil {
+		in = nil // no pinned build for this system; the others still apply
 	}
-	return browser.Find(pref)
+	return chrome.Select(chrome.Preference{Config: cur.Chrome, Env: a.getenv("NOSY_CHROME")}, in)
 }
 
 func (a *app) noBrowser(err error) int {

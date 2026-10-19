@@ -210,7 +210,7 @@ func (i *Installer) Install(ctx context.Context, force bool) (string, error) {
 	if err := os.RemoveAll(i.versionDir()); err != nil {
 		return "", err
 	}
-	if err := os.Rename(staging, i.versionDir()); err != nil {
+	if err := rename(staging, i.versionDir()); err != nil {
 		return "", err
 	}
 	path, ok := i.Installed()
@@ -385,4 +385,17 @@ func checkLink(root, target, link string) error {
 		return fmt.Errorf("the archive has a link out of the folder: %s", link)
 	}
 	return nil
+}
+
+// rename retries for a moment: on Windows a virus scanner can hold the files
+// just written, and the rename is refused until it lets go.
+func rename(from, to string) error {
+	var err error
+	for i := 0; i < 10; i++ {
+		if err = os.Rename(from, to); err == nil {
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return err
 }

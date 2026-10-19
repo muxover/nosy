@@ -18,8 +18,8 @@ var ErrTooOld = errors.New("the browser is too old")
 // Major reads the major version from a product string such as
 // "Chrome/155.0.8059.39" or "HeadlessChrome/155.0.8059.39".
 func Major(product string) (int, bool) {
-	_, v, ok := strings.Cut(product, "/")
-	if !ok {
+	name, v, ok := strings.Cut(product, "/")
+	if !ok || name == "" {
 		return 0, false
 	}
 	major, _, _ := strings.Cut(v, ".")

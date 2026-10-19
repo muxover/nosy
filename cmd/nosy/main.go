@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"runtime/debug"
 	"syscall"
+
+	"github.com/muxover/nosy/internal/chrome"
 )
 
 // version is set at build time; a build from `go install` falls back to the
@@ -37,6 +39,7 @@ Usage:
 Commands:
   scan <url>      open a site in a clean browser and report what it does
   check <url>     look at a site without a browser
+  browser         install, locate or remove Nosy's own Chrome (install, path, remove)
   config          show or change settings (list, get, set, path)
   doctor          check that Nosy has what it needs
   version         print the version
@@ -69,17 +72,28 @@ type app struct {
 	out, err   io.Writer
 	getenv     func(string) string
 	configPath func() (string, error)
+	// installer makes the installer of the pinned browser
+	installer func() (*chrome.Installer, error)
+	// missingLibs and osRelease are what doctor reads about the system
+	missingLibs func(ctx context.Context, path string) ([]string, error)
+	osRelease   func() string
 	// progress is true when status lines may be drawn on err: it is a terminal.
 	progress bool
 }
 
 func newApp() *app {
 	return &app{
-		out:        os.Stdout,
-		err:        os.Stderr,
-		getenv:     os.Getenv,
-		configPath: configFile,
-		progress:   isTerminal(os.Stderr),
+		out:         os.Stdout,
+		err:         os.Stderr,
+		getenv:      os.Getenv,
+		configPath:  configFile,
+		installer:   func() (*chrome.Installer, error) { return chrome.DefaultInstaller(os.UserCacheDir) },
+		missingLibs: chrome.MissingLibs,
+		osRelease: func() string {
+			b, _ := os.ReadFile("/etc/os-release")
+			return string(b)
+		},
+		progress: isTerminal(os.Stderr),
 	}
 }
 
@@ -93,6 +107,8 @@ func (a *app) run(ctx context.Context, args []string) int {
 		return a.scan(ctx, rest)
 	case "check":
 		return a.check(ctx, rest)
+	case "browser":
+		return a.browser(ctx, rest)
 	case "config":
 		return a.config(rest)
 	case "doctor":
@@ -115,7 +131,7 @@ func (a *app) help(args []string) int {
 		return exitOK
 	}
 	switch args[0] {
-	case "scan", "check", "config", "doctor":
+	case "scan", "check", "browser", "config", "doctor":
 		return a.run(context.Background(), []string{args[0], "-h"})
 	case "version", "help":
 		fmt.Fprintf(a.out, "nosy %s: no flags\n", args[0])

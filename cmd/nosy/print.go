@@ -50,6 +50,9 @@ func printSummary(w io.Writer, r *scan.Result) {
 	fmt.Fprintf(w, "Requests    %d, %d to other companies\n", r.Weight.Requests, r.Weight.ThirdRequests)
 	fmt.Fprintf(w, "Companies   %d, %d classified as tracking\n", third, tracking)
 	fmt.Fprintf(w, "Cookies     %d, %d look like identifiers\n", len(r.Cookies), identifiers)
+	origins, thirdStorage, storedIDs := r.StorageCounts()
+	fmt.Fprintf(w, "Storage     %d %s kept data, %d third-party, %d %s like identifiers\n",
+		origins, plural(origins, "origin", "origins"), thirdStorage, storedIDs, plural(storedIDs, "value looks", "values look"))
 
 	if len(r.Companies) > 0 {
 		fmt.Fprint(w, "\nTop companies\n")
