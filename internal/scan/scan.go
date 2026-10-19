@@ -13,6 +13,7 @@ import (
 
 	"github.com/muxover/nosy/internal/browser"
 	"github.com/muxover/nosy/internal/capture"
+	"github.com/muxover/nosy/internal/chrome"
 	"github.com/muxover/nosy/internal/detect"
 	"github.com/muxover/nosy/internal/guard"
 	"github.com/muxover/nosy/internal/score"
@@ -35,6 +36,8 @@ type Options struct {
 
 	// Chrome is the path of the browser; empty lets the driver search PATH.
 	Chrome string
+	// BrowserSource says why that browser was chosen, for the conditions.
+	BrowserSource chrome.Source
 	// Duration is the longest a visit may last; 20 seconds when zero.
 	Duration time.Duration
 	Mobile   bool
@@ -240,6 +243,8 @@ func Build(target *url.URL, c *capture.Capture, o Options) *Result {
 			Date:                 c.Page.ScannedAt.Format(time.RFC3339),
 			Country:              "unknown",
 			Browser:              c.Page.Chromium,
+			BrowserSource:        browserSource(o.BrowserSource),
+			BrowserPinned:        o.BrowserSource == chrome.SourcePinned,
 			UserAgent:            c.Page.UserAgent,
 			Device:               c.Page.Device,
 			Viewport:             c.Page.Viewport,
@@ -320,6 +325,7 @@ func Build(target *url.URL, c *capture.Capture, o Options) *Result {
 	}
 	r.Cookies = cookies(&jar, r.Site, rules.Index, ident, now)
 
+	r.Storage = storage(c, r.Site, rules.Index)
 	r.Fingerprinting = detect.Fingerprinting(c.APICalls)
 	for _, i := range detect.Replay(reqs, rules.Vendors) {
 		r.SessionRecording = append(r.SessionRecording, Evidence{Request: i, URL: reqs[i].URL})
@@ -501,4 +507,65 @@ func thirdPartyKeyHit(hits []KeyHit) bool {
 		}
 	}
 	return false
+}
+
+func browserSource(s chrome.Source) string {
+	if s == "" {
+		return "unknown"
+	}
+	return string(s)
+}
+
+// storage turns what each frame origin stored into the result's form, marking
+// the third parties and the values that look like identifiers.
+func storage(c *capture.Capture, siteName string, index *detect.Index) []StorageOrigin {
+	out := []StorageOrigin{}
+	for _, s := range c.Storage {
+		host := ""
+		if u, err := url.Parse(s.Origin); err == nil {
+			host = u.Hostname()
+		}
+		reg := detect.Registrable(host)
+		o := StorageOrigin{
+			Origin:         s.Origin,
+			ThirdParty:     reg != siteName && !index.SameOwner(reg, siteName),
+			CacheStorage:   s.Caches,
+			LocalStorage:   storageKeys(s.Local, true),
+			SessionStorage: storageKeys(s.Session, false),
+		}
+		for _, db := range s.IndexedDB {
+			d := IDB{Name: db.Name, Version: db.Version}
+			for _, st := range db.Stores {
+				store := IDBStore{Name: st.Name, Entries: st.Entries, Keys: st.Keys}
+				seen := map[string]bool{}
+				for _, v := range st.Values {
+					name := v.Key
+					if name == "" {
+						name = "value"
+					}
+					if !seen[name] && detect.LooksLikeIdentifier(v.Value) {
+						seen[name] = true
+						store.IdentifierValues = append(store.IdentifierValues, name)
+					}
+				}
+				d.Stores = append(d.Stores, store)
+			}
+			o.IndexedDB = append(o.IndexedDB, d)
+		}
+		for _, w := range s.ServiceWorkers {
+			o.ServiceWorkers = append(o.ServiceWorkers, ServiceWorker{Scope: w.Scope, Script: w.Script})
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// storageKeys lists the keys; persistent ones are checked with the identifier
+// rule, the others are gone when the tab closes and so never count.
+func storageKeys(items []capture.StorageItem, persistent bool) []StorageKey {
+	var out []StorageKey
+	for _, it := range items {
+		out = append(out, StorageKey{Key: it.Key, Length: it.Length, Identifier: persistent && detect.LooksLikeIdentifier(it.Value)})
+	}
+	return out
 }

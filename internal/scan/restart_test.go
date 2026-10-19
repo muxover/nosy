@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/muxover/nosy/internal/capture"
@@ -24,4 +25,13 @@ func TestNetworkRestarted(t *testing.T) {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
+}
+
+func mustURL(t *testing.T, s string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }

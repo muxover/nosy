@@ -45,7 +45,13 @@ func IsIdentifier(c capture.Cookie, now time.Time) bool {
 	if time.Unix(int64(c.Expires), 0).Sub(now) <= minLifetime {
 		return false
 	}
-	v := c.Value
+	return LooksLikeIdentifier(c.Value)
+}
+
+// LooksLikeIdentifier is the value half of the identifier rule, for anything
+// that outlives a visit: long enough, random enough, and not plainly a date,
+// a timestamp, a word or a structured string.
+func LooksLikeIdentifier(v string) bool {
 	if u, err := url.QueryUnescape(v); err == nil {
 		v = u
 	}

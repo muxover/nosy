@@ -106,6 +106,7 @@ type Capture struct {
 	CookieWrites []CookieWrite
 	APICalls     []APICall
 	WSFrames     []WSFrame // messages the page sent over WebSockets
+	Storage      []Storage // what the page and its frames stored in the browser
 	Token        string    // text typed into fields for the key-capture check
 	Proxy        guard.Stats
 }
@@ -113,4 +114,46 @@ type Capture struct {
 type WSFrame struct {
 	Host    string
 	Payload string
+}
+
+// Storage is what one frame origin kept in the browser by the end of the visit.
+// Third-party frames have storage of their own, so each origin is its own entry.
+type Storage struct {
+	Origin         string
+	Local          []StorageItem
+	Session        []StorageItem
+	IndexedDB      []IDBDatabase
+	Caches         []string
+	ServiceWorkers []ServiceWorker
+}
+
+// Empty is true when the origin stored nothing.
+func (s Storage) Empty() bool {
+	return len(s.Local) == 0 && len(s.Session) == 0 && len(s.IndexedDB) == 0 && len(s.Caches) == 0 && len(s.ServiceWorkers) == 0
+}
+
+// StorageItem is one key of local or session storage, or one value read from
+// IndexedDB under the path Key.
+type StorageItem struct {
+	Key    string
+	Value  string // clipped; used by the checks, never written to a report
+	Length int
+}
+
+type IDBDatabase struct {
+	Name    string
+	Version int
+	Stores  []IDBStore
+}
+
+type IDBStore struct {
+	Name    string
+	Entries int
+	Keys    []string      // the first few keys
+	Values  []StorageItem // string values found in the first few entries
+}
+
+type ServiceWorker struct {
+	Scope  string
+	Script string
 }
