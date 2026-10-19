@@ -45,9 +45,9 @@ func TestCrossSiteFramesAreWatched(t *testing.T) {
 				attached++
 			}
 		}
-		// five frames of other sites, one inside one of them, and the sandboxed one
-		if attached < 7 {
-			t.Errorf("%d frames were attached as their own targets, want at least 7: site isolation is not on\n%s", attached, strings.Join(log, "\n"))
+		// five frames of other sites, one inside one of them, and the two sandboxed ones
+		if attached < 8 {
+			t.Errorf("%d frames were attached as their own targets, want at least 8: site isolation is not on\n%s", attached, strings.Join(log, "\n"))
 		}
 	})
 
@@ -121,6 +121,44 @@ func TestCrossSiteFramesAreWatched(t *testing.T) {
 			}
 		}
 		t.Errorf("hits = %+v, want one sent from http://xkeys.test to a third party", r.TypedText.Hits)
+	})
+
+	t.Run("sandboxed frames", func(t *testing.T) {
+		said := map[string]string{}
+		for _, host := range []string{"xsandbox.test", "xsandboxso.test"} {
+			for _, q := range fixture.Requests(host) {
+				if q.Path == "/origin" {
+					said[host] = q.Query
+				}
+			}
+		}
+		// without allow-same-origin the frame's origin is opaque and it keeps nothing
+		if said["xsandbox.test"] != "o=null&stored=no" {
+			t.Errorf("the sandboxed frame said %q, want an opaque origin and no storage", said["xsandbox.test"])
+		}
+		if said["xsandboxso.test"] != "o=http%3A%2F%2Fxsandboxso.test&stored=yes" {
+			t.Errorf("the frame with allow-same-origin said %q, want its own origin and storage", said["xsandboxso.test"])
+		}
+		// both are named by their address
+		var webgl, fonts []string
+		for _, f := range r.Fingerprinting {
+			switch f.Name {
+			case "webgl":
+				webgl = f.Frames
+			case "fonts":
+				fonts = f.Frames
+			}
+		}
+		if !has(webgl, "http://xsandbox.test") || !has(fonts, "http://xsandboxso.test") {
+			t.Errorf("webgl frames %v, fonts frames %v", webgl, fonts)
+		}
+		kept := map[string]bool{}
+		for _, o := range r.Storage {
+			kept[o.Origin] = true
+		}
+		if !kept["http://xsandboxso.test"] || kept["http://xsandbox.test"] {
+			t.Errorf("storage origins %v, want the frame with allow-same-origin only", kept)
+		}
 	})
 
 	t.Run("storage of a frame stands apart", func(t *testing.T) {

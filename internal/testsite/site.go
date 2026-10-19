@@ -37,6 +37,13 @@ type Site struct {
 	// uses it, so a connection to it can only come from that chain.
 	HopCanary *Canary
 
+	// LocalCanary listens on a second local address, 127.0.0.2, on a free port.
+	// UDPCanary and LocalUDPCanary count packets on 127.0.0.1 and 127.0.0.2, for
+	// WebRTC. Each is nil when the address cannot be opened here.
+	LocalCanary    *Canary
+	UDPCanary      *UDPCanary
+	LocalUDPCanary *UDPCanary
+
 	servers []*http.Server
 	lns     []net.Listener
 
@@ -63,6 +70,34 @@ type Canary struct {
 
 func (c *Canary) Conns() int64 { return c.n.Load() }
 func (c *Canary) Close()       { c.ln.Close() }
+
+// UDPCanary counts packets sent to an address that should never get any.
+type UDPCanary struct {
+	Addr string
+	pc   net.PacketConn
+	n    atomic.Int64
+}
+
+func (c *UDPCanary) Packets() int64 { return c.n.Load() }
+func (c *UDPCanary) Close()         { c.pc.Close() }
+
+func newUDPCanary(addr string) (*UDPCanary, error) {
+	pc, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+	c := &UDPCanary{Addr: pc.LocalAddr().String(), pc: pc}
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			if _, _, err := pc.ReadFrom(buf); err != nil {
+				return
+			}
+			c.n.Add(1)
+		}
+	}()
+	return c, nil
+}
 
 func newCanary(addr string) (*Canary, error) {
 	ln, err := net.Listen("tcp", addr)
@@ -97,6 +132,9 @@ func Start() (*Site, error) {
 	// not available the address tests that need it are skipped
 	s.CanaryPort, _ = newCanary("127.0.0.1:80")
 	s.HopCanary, _ = newCanary("127.0.0.2:80")
+	s.LocalCanary, _ = newCanary("127.0.0.2:0")
+	s.UDPCanary, _ = newUDPCanary("127.0.0.1:0")
+	s.LocalUDPCanary, _ = newUDPCanary("127.0.0.2:0")
 
 	hl, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -134,8 +172,15 @@ func (s *Site) Close() {
 	if s.CanaryPort != nil {
 		s.CanaryPort.Close()
 	}
-	if s.HopCanary != nil {
-		s.HopCanary.Close()
+	for _, c := range []*Canary{s.HopCanary, s.LocalCanary} {
+		if c != nil {
+			c.Close()
+		}
+	}
+	for _, c := range []*UDPCanary{s.UDPCanary, s.LocalUDPCanary} {
+		if c != nil {
+			c.Close()
+		}
 	}
 }
 

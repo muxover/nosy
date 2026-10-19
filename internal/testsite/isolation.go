@@ -7,6 +7,22 @@ import (
 	"net/http"
 )
 
+// sandboxed is a frame that reports the origin it runs with, and tries to keep a
+// value in local storage.
+func sandboxed(body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/origin" {
+			noContent(w, r)
+			return
+		}
+		html(w, 200, page("A sandboxed frame", body+`<script>
+var stored = 'no';
+try { localStorage.setItem('sandboxed', 'yes'); stored = 'yes'; } catch (e) {}
+fetch('/origin?o=' + encodeURIComponent(self.origin) + '&stored=' + stored, {mode: 'no-cors'});
+</script>`))
+	}
+}
+
 // frames of other sites: with site isolation on, each runs in a process of its own
 func frame(body string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { html(w, 200, page("A frame of another site", body)) }
@@ -40,6 +56,7 @@ func (s *Site) isolationPages() map[string]http.HandlerFunc {
 					`<iframe src="http://xkeys.test/" width="300" height="120"></iframe>`+
 					`<iframe src="http://xnest.test/" width="300" height="120"></iframe>`+
 					`<iframe sandbox="allow-scripts" src="http://xsandbox.test/" width="300" height="80"></iframe>`+
+					`<iframe sandbox="allow-scripts allow-same-origin" src="http://xsandboxso.test/" width="300" height="80"></iframe>`+
 					`<iframe src="https://xstore.test/" width="300" height="80"></iframe>`))
 		},
 		"xfp.test": frame(scriptTag("http://fpvendor.test/canvas.js") + `<script>` + canvasJS + `</script>`),
@@ -47,12 +64,15 @@ func (s *Site) isolationPages() map[string]http.HandlerFunc {
 			http.SetCookie(w, &http.Cookie{Name: "xuid", Value: "9f86d081884c7d659a2feaa0c55ad015", Path: "/", MaxAge: 31536000, SameSite: http.SameSiteNoneMode, Secure: true})
 			html(w, 200, page("A tracking frame", `<img alt="" src="http://ads.test/px.gif">`))
 		},
-		"xrec.test":     frame(scriptTag("http://replayvendor.test/recorder.js")),
-		"xkeys.test":    frame(`<form><label>Name <input type="text" name="q"></label></form>` + scriptTag("http://keylog.test/input-b64.js")),
-		"xnest.test":    frame(`<iframe src="http://xnested.test/" width="260" height="80"></iframe>`),
-		"xnested.test":  frame(scriptTag("http://fpvendor.test/audio.js")),
-		"xsandbox.test": frame(scriptTag("http://fpvendor.test/webgl.js") + `<script>try { localStorage.setItem('a', 'b'); } catch (e) { window.__blocked = true; }</script>`),
-		"xstore.test":   frame(`<script>` + tpStoreJS + `</script>`),
+		"xrec.test":    frame(scriptTag("http://replayvendor.test/recorder.js")),
+		"xkeys.test":   frame(`<form><label>Name <input type="text" name="q"></label></form>` + scriptTag("http://keylog.test/input-b64.js")),
+		"xnest.test":   frame(`<iframe src="http://xnested.test/" width="260" height="80"></iframe>`),
+		"xnested.test": frame(scriptTag("http://fpvendor.test/audio.js")),
+		// sandboxed without allow-same-origin: its origin is opaque, and it says so
+		"xsandbox.test": sandboxed(scriptTag("http://fpvendor.test/webgl.js")),
+		// sandboxed with allow-same-origin: it keeps its origin and its storage
+		"xsandboxso.test": sandboxed(scriptTag("http://fpvendor.test/fonts.js")),
+		"xstore.test":     frame(`<script>` + tpStoreJS + `</script>`),
 
 		// the same kinds of frames doing nothing wrong
 		"xcontrol.test": func(w http.ResponseWriter, r *http.Request) {

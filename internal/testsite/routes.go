@@ -406,7 +406,7 @@ func (s *Site) route(host string) (http.HandlerFunc, bool) {
 		"unlisted.test": pixel,
 		"ownco.test":    pixel,
 	}
-	for _, extra := range []map[string]http.HandlerFunc{s.chainPages(), s.leakPages(), s.statePages(), s.isolationPages()} {
+	for _, extra := range []map[string]http.HandlerFunc{s.chainPages(), s.leakPages(), s.statePages(), s.isolationPages(), s.networkPages()} {
 		for name, h := range extra {
 			pages[name] = h
 		}

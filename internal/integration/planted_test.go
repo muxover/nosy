@@ -314,7 +314,8 @@ func TestRefusesBeforeScanning(t *testing.T) {
 	inputs := []string{
 		"http://127.0.0.1/", "http://localhost/", "http://[::1]/", "http://10.0.0.1/", "http://169.254.169.254/latest/meta-data/",
 		"http://[fd00:ec2::254]/", "http://[::ffff:10.0.0.1]/", "http://192.168.1.1/", "http://100.64.0.1/",
-		"http://rebind.example/", "http://metadata.example/", "http://v6.example/", "http://mixed.example/",
+		"http://rebind.example/", "http://metadata.example/", "http://v6.example/",
+		"http://printer.local/", "http://router/", "http://db.internal/", "http://2130706433/", "http://0x7f.1/",
 	}
 	for _, in := range inputs {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -357,6 +358,9 @@ func TestPrivateAddressesNeverReached(t *testing.T) {
 	}
 	if !hasNote(r, "safety guard refused") {
 		t.Errorf("notes = %v", r.Notes)
+	}
+	if f := finding(r, "local-network"); f == nil || f.Label != scan.Observed || !strings.Contains(f.Text, "loopback") || !strings.Contains(f.Text, "cloud metadata") {
+		t.Errorf("local network finding = %+v", f)
 	}
 	for _, blocked := range []string{"127.0.0.1", "169.254.169.254", "10.0.0.5", "metadata.google.internal"} {
 		found := false

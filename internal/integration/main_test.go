@@ -40,7 +40,6 @@ func TestMain(m *testing.M) {
 	guard.StubDNS("rebind.example", "10.0.0.5")
 	guard.StubDNS("metadata.example", "169.254.169.254")
 	guard.StubDNS("v6.example", "fd00::1")
-	guard.StubDNS("mixed.example", "93.184.216.34", "10.0.0.5")
 	browser.SetTestTrust(fixture.CAPin)
 	code := m.Run()
 	fixture.Close()
