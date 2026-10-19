@@ -414,8 +414,10 @@ func (v *visit) setup(ctx context.Context) error {
 	if err := chromedp.Run(ctx); err != nil {
 		return fmt.Errorf("launch: %w", err)
 	}
-	if err := chromedp.Run(ctx, actions...); err != nil {
-		return fmt.Errorf("configure: %w", err)
+	for _, a := range actions {
+		if err := chromedp.Run(ctx, a); err != nil {
+			return fmt.Errorf("configure %T: %w", a, err)
+		}
 	}
 	return nil
 }
