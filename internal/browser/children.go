@@ -32,6 +32,8 @@ type devtools struct {
 	next int64
 	once sync.Once
 
+	pageSession string
+
 	hmu      sync.Mutex
 	handlers map[string]func(ev any) // by session id
 	pending  map[int64]chan reply
@@ -75,6 +77,18 @@ func (v *visit) watchChildren(ctx context.Context, address string) (*devtools, e
 	select {
 	case <-d.ready:
 	case <-time.After(time.Second):
+	}
+	d.hmu.Lock()
+	page := d.pageSession
+	d.hmu.Unlock()
+	if page == "" {
+		return d, errors.New("the page was not attached")
+	}
+	// the page's first request must find the answer to the guard's challenge ready
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if _, err := d.call(cctx, page, "Fetch.enable", map[string]any{"handleAuthRequests": true, "patterns": []map[string]any{{"urlPattern": "*"}}}); err != nil {
+		return d, err
 	}
 	return d, nil
 }
@@ -203,6 +217,10 @@ func (d *devtools) read() {
 			d.detached(m.Params)
 			continue
 		}
+		if m.Method == "Fetch.authRequired" || m.Method == "Fetch.requestPaused" {
+			d.fetchEvent(m)
+			continue
+		}
 		d.hmu.Lock()
 		h := d.handlers[m.SessionID]
 		d.hmu.Unlock()
@@ -213,6 +231,36 @@ func (d *devtools) read() {
 			h(ev)
 		}
 	}
+}
+
+// proxyAuth turns on the answer to the guard's challenge in one session: every
+// request through the guard must carry the scan's secret. The browser only
+// reports a challenge for requests it holds, so each is held and let go at once.
+func (d *devtools) proxyAuth(session string) {
+	d.send(session, "Fetch.enable", map[string]any{"handleAuthRequests": true, "patterns": []map[string]any{{"urlPattern": "*"}}})
+}
+
+func (d *devtools) fetchEvent(m devtoolsMessage) {
+	var e struct {
+		RequestID     string `json:"requestId"`
+		AuthChallenge struct {
+			Source string `json:"source"`
+			Origin string `json:"origin"`
+		} `json:"authChallenge"`
+	}
+	if json.Unmarshal(m.Params, &e) != nil {
+		return
+	}
+	if m.Method == "Fetch.requestPaused" {
+		d.send(m.SessionID, "Fetch.continueRequest", map[string]any{"requestId": e.RequestID})
+		return
+	}
+	resp := map[string]any{"response": "CancelAuth"}
+	// only the guard is given the secret; a site that asks for a password gets none
+	if e.AuthChallenge.Source == "Proxy" && strings.TrimPrefix(e.AuthChallenge.Origin, "http://") == d.v.o.Proxy.Addr() {
+		resp = map[string]any{"response": "ProvideCredentials", "username": d.v.o.Proxy.User(), "password": d.v.o.Proxy.Secret()}
+	}
+	d.send(m.SessionID, "Fetch.continueWithAuth", map[string]any{"requestId": e.RequestID, "authChallengeResponse": resp})
 }
 
 func (d *devtools) answer(m devtoolsMessage) {
@@ -282,6 +330,9 @@ func (d *devtools) attached(raw json.RawMessage) {
 		// the browser's own new tab page: its frames are not the site's, so they are not recorded
 		resume()
 	case typ == "page" && !d.v.isPopup(e.TargetInfo.TargetID):
+		d.hmu.Lock()
+		d.pageSession = e.SessionID
+		d.hmu.Unlock()
 		d.once.Do(func() { close(d.ready) })
 		// its workers and frames start paused for us
 		d.send(e.SessionID, "Target.setAutoAttach", map[string]any{
@@ -304,6 +355,7 @@ func (d *devtools) attached(raw json.RawMessage) {
 		for _, c := range d.v.childCmds {
 			d.send(e.SessionID, c.method, c.params)
 		}
+		d.proxyAuth(e.SessionID)
 		// a frame can hold frames and start workers
 		d.send(e.SessionID, "Target.setAutoAttach", map[string]any{
 			"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
@@ -315,6 +367,7 @@ func (d *devtools) attached(raw json.RawMessage) {
 		d.handlers[e.SessionID] = d.v.handler(d.v.parent, e.TargetInfo.TargetID+"|")
 		d.hmu.Unlock()
 		d.send(e.SessionID, "Network.enable", map[string]any{})
+		d.proxyAuth(e.SessionID)
 		// a worker can start more workers
 		d.send(e.SessionID, "Target.setAutoAttach", map[string]any{
 			"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,

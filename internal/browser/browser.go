@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -121,6 +122,8 @@ func Visit(ctx context.Context, target *url.URL, o Options) (result *capture.Cap
 		return nil, err
 	}
 	address := fmt.Sprintf("http://127.0.0.1:%d", port)
+	// a page must never reach the browser's own DevTools, --allow-private or not
+	o.Proxy.Never(netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port)))
 	var cmd *exec.Cmd
 	opts := allocatorOptions(profile, port, o)
 	opts = append(opts, chromedp.ModifyCmdFunc(func(c *exec.Cmd) {
@@ -165,12 +168,17 @@ func Visit(ctx context.Context, target *url.URL, o Options) (result *capture.Cap
 	if c := chromedp.FromContext(chromeCtx); c != nil && c.Target != nil {
 		v.mainTarget = string(c.Target.TargetID)
 	}
-	if d, err := v.watchChildren(visitCtx, address); err != nil {
-		v.logf("frames and workers in other processes are not recorded: %v", err)
-	} else {
-		v.dt = d
-		defer d.Close()
+	// the second connection answers the guard's challenge: without it nothing
+	// gets out, so a visit cannot go on without it
+	d, err := v.watchChildren(visitCtx, address)
+	if err != nil {
+		if d != nil {
+			d.Close()
+		}
+		return nil, fmt.Errorf("start browser: watch the page: %w", err)
 	}
+	v.dt = d
+	defer d.Close()
 
 	v.t0 = time.Now()
 	v.c.Page.ScannedAt = v.t0.UTC()
@@ -216,13 +224,18 @@ func allocatorOptions(profile string, port int, o Options) []chromedp.ExecAlloca
 		chromedp.Flag("remote-debugging-port", fmt.Sprint(port)),
 		chromedp.WindowSize(w, h),
 		chromedp.Flag("lang", "en-US"),
+		// one proxy for every scheme: http, https, ws and wss all go through the guard
 		chromedp.Flag("proxy-server", "http://"+o.Proxy.Addr()),
 		// loopback and link-local hosts skip the proxy unless told otherwise
 		chromedp.Flag("proxy-bypass-list", "<-loopback>"),
-		// the browser may not resolve names itself; only the proxy does
+		// the browser may not resolve names itself; only the guard does
 		chromedp.Flag("host-resolver-rules", "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"),
+		chromedp.Flag("dns-prefetch-disable", true),
+		// QUIC is UDP, which a proxy for TCP cannot carry
 		chromedp.Flag("disable-quic", true),
+		// WebRTC may use UDP only through a proxy, which there is none of
 		chromedp.Flag("force-webrtc-ip-handling-policy", "disable_non_proxied_udp"),
+		chromedp.Flag("enforce-webrtc-ip-permission-check", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-crash-reporter", true),
 		chromedp.Flag("disable-breakpad", true),
@@ -238,11 +251,13 @@ func allocatorOptions(profile string, port int, o Options) []chromedp.ExecAlloca
 		// TrackingProtection3pcd: Chromium 141 blocks third-party cookies with the
 		// reason ThirdPartyPhaseout whatever the profile says, which hides every
 		// tracker cookie from the scan
-		chromedp.Flag("disable-features", "Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,TrackingProtection3pcd"),
+		chromedp.Flag("disable-features", "Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,TrackingProtection3pcd,"+
+			// the browser's own resolvers and anything that connects ahead of the page
+			"AsyncDns,DnsOverHttps,Prerender2,PreloadingHeuristics,SpeculationRulesPrefetchFuture"),
 		chromedp.Flag("metrics-recording-only", true),
 		chromedp.Flag("mute-audio", true),
 		chromedp.Flag("hide-scrollbars", true),
-		// no GPU here: software WebGL, so scripts that probe WebGL see what a normal browser offers
+		// software WebGL where there is no GPU, so scripts that ask for WebGL get it
 		chromedp.Flag("enable-unsafe-swiftshader", true),
 	}
 	opts = append(opts, testFlags()...)
@@ -849,6 +864,12 @@ func writePreferences(profile string) error {
 				"automatic_downloads": 2,
 			},
 		},
+		// no DNS of its own and nothing fetched ahead of the page
+		"net":             map[string]any{"network_prediction_options": 2},
+		"dns_prefetching": map[string]any{"enabled": false},
+		"webrtc": map[string]any{
+			"ip_handling_policy": "disable_non_proxied_udp", "multiple_routes_enabled": false, "nonproxied_udp_enabled": false,
+		},
 		"download": map[string]any{
 			"prompt_for_download": false,
 			"default_directory":   filepath.Join(profile, "downloads"),
@@ -859,7 +880,18 @@ func writePreferences(profile string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "Preferences"), b, 0o600)
+	if err := os.WriteFile(filepath.Join(dir, "Preferences"), b, 0o600); err != nil {
+		return err
+	}
+	// the browser-wide settings: its own DNS over HTTPS and async resolver off
+	local := map[string]any{
+		"dns_over_https": map[string]any{"mode": "off", "templates": ""},
+		"async_dns":      map[string]any{"enabled": false},
+	}
+	if b, err = json.Marshal(local); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(profile, "Local State"), b, 0o600)
 }
 
 // noSandboxOff keeps the sandbox on. chromedp adds --no-sandbox by itself when
