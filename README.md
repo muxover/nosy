@@ -54,7 +54,7 @@ nosy scan --device mobile --gpc --json example.com
 nosy check example.com
 ```
 
-A scan opens the site in a new throwaway Chrome profile, scrolls and types into its fields like a reader, and prints a summary: the privacy score, request and company counts, the main findings each labelled observed, classified or inferred, and the conditions of the scan. Addresses on your own network are refused unless you pass `--allow-private`.
+A scan opens the site in a new throwaway Chrome profile, scrolls and types into its fields like a reader, and prints a summary: the privacy score, request and company counts, the main findings each labelled observed, classified or inferred, and the conditions of the scan. Nothing the page does reaches your own machine, your network or a cloud metadata service: every request goes through Nosy's guard, which refuses those addresses and tells you in the findings when the page tried. `--allow-private` opens your machine and network for a site of your own; cloud metadata stays closed.
 
 ---
 
@@ -80,7 +80,7 @@ A scan opens the site in a new throwaway Chrome profile, scrolls and types into 
 | `scan` | `--duration D` | Longest the visit may last, 10s to 120s (default 20s) |
 | `scan` | `--device D` | `desktop` or `mobile` (default `desktop`) |
 | `scan` | `--gpc` | Send the Global Privacy Control signal |
-| `scan`, `check` | `--allow-private` | Allow private, loopback and link-local targets; prints a warning |
+| `scan`, `check` | `--allow-private` | Allow private, loopback and link-local targets, never cloud metadata; prints a warning and is recorded in the result |
 | `scan`, `check` | `--json` | Print the result as JSON on stdout |
 | `scan` | `--quiet` | No progress, and a one-line summary |
 

@@ -95,12 +95,21 @@ Nosy's place: a clean visit, every finding with its evidence, consent and GPC te
 - 2026-10-19: each scan has a new profile in the temp folder, named `nosy-profile-` and holding a note with the owner's process number. It is deleted after a normal end, an error, Ctrl+C and a killed Chrome. A failed removal is a note on the result. The next scan clears the profiles of scans that were killed, only folders with that name and Nosy's note whose owner is gone or whose note is over an hour old (a scan lasts two minutes at most). A profile in use, a folder without the note and any other name stay. Nothing outside the temp folder is ever read or deleted, and the user's own Chrome profile, cookies and extensions are never touched.
 - 2026-10-19: the browser is locked down three ways, so one failing does not open a door. Launch flags and the profile: `--deny-permission-prompts`, no extensions or component extensions with background pages, no first run or sync, content settings for every permission set to block, downloads going to a folder inside the profile. The browser connection: `Browser.setPermission` denied for every permission the protocol names and `Browser.setDownloadBehavior` deny. The page connection: every new window is closed before it loads anything and the attempt is a finding, as is every download and every address on this machine (`file:`, `chrome:` and the like) the page reaches for. Each finding comes from what the browser reports.
 - 2026-10-19: `Options.Remote`, the shared browser and browser contexts are removed. The CLI never used them; only the tests did, to run many scans in one browser, and they were a second way of isolating scans that needed tests of its own. Every scan is its own browser process with its own profile, so the process boundary is the isolation, and one set of tests proves it.
-- 2026-10-19: when the page script has no web address in its stack (code run from `eval`, for instance), its fingerprinting call is listed as "inline in" the frame's origin.
+- 2026-10-19: when the page script has no web address in its stack (code run from `eval`, for instance), its fingerprinting call is listed as "inline in" the frame's address.
+- 2026-10-19: Jax's call, step 6 answers. The commit that does not build on its own stays: history is never rewritten. From now on every commit builds and passes vet on its own. Permissions, pop-ups, local addresses, and old profiles cleared only from the OS temp folder stay as they are.
+- 2026-10-19: Jax's call. What happens in a frame is attributed to the frame's address (scheme and host of its URL), and results and reports call it that. A sandboxed frame without `allow-same-origin` has an opaque origin; its address is what is known. The planted page has one sandboxed frame without `allow-same-origin` (opaque, keeps no storage) and one with it (keeps its origin and storage), and a test checks both.
+- 2026-10-19: one table of address ranges (`guard.ranges`, `net/netip`), most specific first, each entry naming its kind (loopback, private, link-local, cloud metadata, carrier-grade NAT, this network, multicast, broadcast, reserved, benchmarking, documentation, tunnel). IPv6 forms that carry an IPv4 address (mapped, compatible, NAT64 `64:ff9b::/96`, 6to4) are judged by the address they carry. A public IPv4 address behind NAT64 is allowed, because an IPv6-only network reaches every IPv4 site that way; NAT64 for local use (`64:ff9b:1::/48`), Teredo and 6to4 are refused whatever they carry. IPv4 in the spellings browsers accept (2130706433, 0177.0.0.1, 0x7f.1, 127.1) is read the WHATWG way and gets the same answer.
+- 2026-10-19: the guard resolves every name, checks every answer, and dials only answers that pass, at the address it checked: a name with public and private answers only ever reaches a public one, and a name with none is refused. Names that only exist on a local network are refused before any lookup without `--allow-private`: localhost, single labels, and names ending in `.local`, `.localhost`, `.internal`, `.home.arpa` and `.lan` (the last two added: they are the home-network names routers hand out). An address refused whatever the port (a loopback address on port 8080) is named by its kind, not as a port refusal.
+- 2026-10-19: cloud metadata is refused even with `--allow-private`: 169.254.169.254 and the other AWS, GCP, Azure, Alibaba and Oracle addresses, over IPv4 and IPv6. So are the guard's own port and the browser's DevTools port, which a page could otherwise use to control the browser. `--allow-private` is recorded as `allow_private` in the conditions; a report from such a scan is never shared (v0.2.0).
+- 2026-10-19: the guard listens on 127.0.0.1, on a free port, for one scan, and is closed when the scan ends. Every request needs the scan's secret as proxy credentials (user `nosy`, a random 48-character password), so no other program or page can use it; the browser gets it through the DevTools connection, which holds each request for the challenge and lets it go at once (`Fetch` with `handleAuthRequests`; the browser reports a challenge only for requests it holds). A site's own password prompt gets no answer. The guard goes out directly: `HTTP_PROXY`, `HTTPS_PROXY` and system settings are ignored (`--proxy` is v0.5.0).
+- 2026-10-19: Chrome is kept inside the guard by one proxy for every scheme (http, https, ws, wss), `<-loopback>` in the bypass list, no name resolution of its own (`host-resolver-rules` maps every name to nothing; async DNS, DNS over HTTPS and DNS prefetch are off, by feature, flag and profile), QUIC off, WebRTC limited to proxied UDP (of which there is none) by flag and profile, prediction, prerender and preloading off. Each way out has a planted page aimed at canaries on 127.0.0.1 and 127.0.0.2 over TCP and UDP.
+- 2026-10-19: limits besides the 60 MB and the time cap: 25 MB for one answer (inside an encrypted tunnel the guard cannot see requests, so there it caps the connection), 128 connections open at once, 10 seconds for a server to start answering, 15 seconds of silence from a server the browser is waiting on. Each one that is hit is a note on the result.
+- 2026-10-19: every refusal of the page's own requests is kept with the kind of address and the address of the frame that asked, in `blocked`, and shown as an observed finding: "The page tried to reach your local network". The note listing every refused destination stays, for refusals of public addresses on other ports.
 - 2026-10-17: work happens one build step at a time on the `build` branch and is reviewed before the next step. Nothing is tagged or released from it.
 
 ## Status
 
-Steps 1 to 6 of v0.1.0 are done (build order below). `nosy scan`, `check`, `browser install|path|remove`, `config`, `doctor`, `version` and `help` work, and the engine behind them is tested against a real Chromium on Linux, Windows and macOS, both a Chrome already on the machine and Nosy's pinned build, with the race detector on.
+Steps 1 to 7 of v0.1.0 are done (build order below). `nosy scan`, `check`, `browser install|path|remove`, `config`, `doctor`, `version` and `help` work, and the engine behind them is tested against a real Chromium on Linux, Windows and macOS, both a Chrome already on the machine and Nosy's pinned build, with the race detector on.
 
 What works:
 
@@ -108,6 +117,7 @@ What works:
 - Requests, cookies, storage (local, session, IndexedDB, Cache Storage, service workers) per origin, fingerprinting by technique, session-recording vendors and typed-text leaks, each labelled observed, classified or inferred.
 - A new profile per scan, removed after every kind of ending, with old ones from crashes cleared by the next scan.
 - Downloads refused, permission prompts denied, new windows closed, addresses on the machine unreachable, each reported when the page tried.
+- The guard on all three systems: no planted way out (fetch, XHR, WebSocket, images, frames, workers, service workers, redirects, meta refresh, forms, WebRTC) reaches the canaries on 127.0.0.1 and 127.0.0.2, and each attempt is named in the result with its kind and frame.
 - `nosy browser install` for a pinned Chrome for Testing (155.0.8059.84) on linux64, mac-arm64, mac-x64 and win64.
 
 What was left behind on purpose, because it is server-side or belongs to a later step: the web app, store, queue, worker, share cards, Turnstile and rate limits; the live request feed; the report renderers (step 10); technology detection from webappanalyzer rules, so consent platforms found that way are not reported, only the consent APIs the page exposes; country lookup from IP ranges (step 8).
@@ -127,6 +137,8 @@ Never tried:
 - A real Windows or macOS desktop with a GPU. Every browser test ran on GitHub's runners and a Linux container, which have none or a virtual one, so hardware WebGL, high-DPI screens, several monitors and a browser that is also open for the user are untested.
 - Linux or Windows on arm64. There is no pinned build there; only the error path is tested. macOS on arm64 is tested only on the runner.
 - A corporate proxy, a VPN, TLS interception and a network that blocks the guard's resolver.
+- An IPv6-only network that reaches IPv4 through NAT64, and a Windows machine with a Teredo tunnel up. The table handles both; neither ran.
+- WebRTC with the policy off: the planted WebRTC page shows the canaries stay quiet, but there is no positive control that the page would reach them if UDP were allowed.
 - A real run of `nosy browser install` outside CI, and the install channels (Homebrew, Scoop, Go, releases): step 12.
 - Sites in languages and layouts beyond the planted pages and the old engine's golden list: step 11.
 
@@ -153,7 +165,15 @@ These parts hold across versions.
 
 ### Guard
 
-Every request goes through a local proxy. It resolves names itself, refuses private, loopback, link-local, metadata and reserved addresses and any port but 80 and 443, checks the address again on the socket before connecting, follows at most 20 redirects, and counts bytes against the size cap (60 MB by default). Step 7 tests it on all three systems.
+Every request the browser makes goes through the guard, a proxy on 127.0.0.1 that lives for one scan and answers only to the scan's secret.
+
+- Addresses: one table of ranges in `internal/guard/addr.go`, each with its kind. Literal addresses in any spelling and every DNS answer are checked against it; IPv6 forms that carry an IPv4 address are judged by the address inside.
+- Names: resolved by the guard alone, every answer checked, only a permitted answer dialed, at the address checked, and checked again on the socket. Local-network names are refused before any lookup.
+- Ports: 80 and 443 only.
+- `--allow-private` opens the user's own machine and network, never cloud metadata, the guard's port or the browser's DevTools port, and is written into the conditions.
+- Limits: 60 MB a scan, 25 MB an answer, 128 connections, 10 seconds to start answering, 15 seconds of silence; the time cap of the visit. Each one hit is a note.
+- Chrome: one proxy for every scheme, no bypass for loopback, no DNS of its own, no QUIC, no unproxied WebRTC, no prediction or prefetch.
+- Results: each refused attempt of the page is in `blocked` with its kind and frame, and in an observed finding.
 
 ### Scores and labels
 
@@ -163,7 +183,7 @@ Every request goes through a local proxy. It resolves names itself, refuses priv
 
 ### Conditions
 
-Every result records its conditions: date and time, country the scan ran from (unknown until step 8), browser and version and whether it was the pinned build and why that browser was chosen, device and viewport, consent mode, Global Privacy Control, duration limit and time used, Nosy version, rules version, `webgl`, whether the storage read was cut short, and the browser settings Nosy changed (third-party cookie phase-out off, site isolation on, software WebGL). Two reports are compared only when their conditions match.
+Every result records its conditions: date and time, country the scan ran from (unknown until step 8), browser and version and whether it was the pinned build and why that browser was chosen, device and viewport, consent mode, Global Privacy Control, whether `--allow-private` was used, duration limit and time used, Nosy version, rules version, `webgl`, whether the storage read was cut short, and the browser settings Nosy changed (third-party cookie phase-out off, site isolation on, software WebGL). Two reports are compared only when their conditions match.
 
 ### Rules flow
 
@@ -240,7 +260,7 @@ Launch:
 | Planted pages | Each detection fires on a page built to trigger it and stays quiet on a clean one | Running on all three systems |
 | Cross-platform | Build and planted-page suite pass on Windows, macOS and Linux, on a system Chrome and the pinned build | Running |
 | Isolation | Two scans in a row share no cookies, storage, cache or HSTS; the temp profile is gone after every ending; downloads, permissions, pop-ups and local addresses are refused | Done (step 6) |
-| Guard | Private ranges, every IPv6 form, rebinding DNS, redirects to private hosts, `--allow-private` | Tested on Linux in the sandbox; all three systems in step 7 |
+| Guard | Every range in every spelling and IPv6 form (table and fuzz tests), rebinding DNS, mixed answers, local names, redirects to private hosts, every way out of a page against canaries on two local addresses, the secret, `--allow-private` | Done (step 7) |
 | Rules | Tampered or unsigned rules refused; offline first run works | Step 8 |
 | Hostile report input | Names, URLs and cookie names crafted to break out of the HTML report show as text | Step 10 |
 | Golden sites | 20 real sites x 3 runs before release; median company count within 10% and score within 5 points of the old engine, or every difference explained | Step 11 |
@@ -257,8 +277,8 @@ CI blocks a release on everything except the golden run, which needs real sites;
 | 4 | CLI commands | Each prints sensible output on a test site | Done |
 | 5 | Browser handling, storage capture | A clean machine goes from install to first scan with two commands | Done |
 | 6 | Isolation | Isolation tests pass on all three systems | Done |
-| 7 | Guard on the desktop | Guard suite passes on all three systems | Next |
-| 8 | Rules v1, signed, bundled; `rules update`; DB-IP country | A tampered file is refused and offline first run works | |
+| 7 | Guard on the desktop | Guard suite passes on all three systems | Done |
+| 8 | Rules v1, signed, bundled; `rules update`; DB-IP country | A tampered file is refused and offline first run works | Next |
 | 9 | Setup checks | Each has fixture tests | |
 | 10 | Reports: terminal, HTML, JSON schema v1, `nosy report` | Hostile-input tests pass and Jax has read a real report on his PC | |
 | 11 | Golden comparison, 20 sites x 3 runs | Within tolerance, or every difference explained | |
@@ -266,7 +286,7 @@ CI blocks a release on everything except the golden run, which needs real sites;
 | 13 | Docs site replaces coming-soon | Passes the website rules at phone and desktop width | |
 | 14 | Release and launch: the release script adds one signed commit on top of the full history and tags v0.1.0; launch email; signup list deleted; Nosy unhidden on muxover.com | A fresh install from each channel scans a real site and the email has gone out | |
 
-Progress: 6 of 14 steps done.
+Progress: 7 of 14 steps done.
 
 ### Release blockers
 
@@ -283,7 +303,7 @@ Progress: 6 of 14 steps done.
 Scope:
 
 - `nosy publish <file.json>`, sent only with sharing on or `--share`; the first-run question (default No, saved in config, overridden per scan with `--share` and `--no-share`); the terminal always says when a report was shared, with its link.
-- Only public sites (the server checks the host resolves to public addresses). The report JSON only, never a HAR. No IPs kept (country derived, then the IP dropped), no local paths, cookie values, typed test words or install name. Each install has a random key that signs uploads.
+- Only public sites (the server checks the host resolves to public addresses), and never a scan made with `--allow-private` (its conditions say so). The report JSON only, never a HAR. No IPs kept (country derived, then the IP dropped), no local paths, cookie values, typed test words or install name. Each install has a random key that signs uploads.
 - Trust: every report shows "shared by a Nosy user" with date, country and versions. The server validates the schema, the evidence against the findings and the rules version, and re-runs the cheap setup checks. Agreement across scans builds confidence; outliers wait for review. Site owners can ask for a correction under a published policy.
 - The index site: search a site, history over time and by country, compare dates, methodology, open rules. The Docker image.
 - Quality bar: upload validation and privacy tests pass (bad signature, replay, oversized or inconsistent reports, private hosts, rate limits); the index terms, privacy and correction policy are live.

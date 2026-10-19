@@ -22,13 +22,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Storage capture: localStorage, sessionStorage, IndexedDB, Cache Storage names and service workers, per frame origin with first and third party apart, with values that look like identifiers marked by the cookie rule.
 - A manual `Chrome hashes` workflow that prints the size and SHA-256 of each Chrome for Testing build to pin.
 
-- Site isolation is on. Frames of other sites, frames inside them and sandboxed frames are watched with the same instrumentation as the page: requests, cookies, storage, fingerprinting, session recording and typed text found in them are attributed to the frame's origin.
+- Site isolation is on. Frames of other sites, frames inside them and sandboxed frames are watched with the same instrumentation as the page: requests, cookies, storage, fingerprinting, session recording and typed text found in them are attributed to the frame's address.
 - Findings for new windows, downloads and addresses on the machine that a page tried to reach, and a `refused` section in the JSON result.
 - `webgl` (hardware, software or none) and `storage_cut_short` in the result's conditions, and a note and a line in the terminal when the storage read ran out of time.
 - Throwaway profiles carry a note of their owner; profiles left by a crashed or killed scan are cleared by the next scan, and only those.
 - Downloads are refused, every permission request denied, and new windows closed before they load anything.
 
+- A finding and a `blocked` list in the result for every attempt of the page to reach the local network, this machine or a cloud metadata service, with the kind of address and the frame that tried.
+- `allow_private` in the result's conditions, and notes when a cap on one answer, on open connections or on a slow server was reached.
+
 ### Changed
+
+- The guard's address check covers every range and IPv6 form in one table, reads IPv4 in the spellings browsers accept, refuses local-network names (`.local`, `.internal`, single labels and the like), and dials only the answers of a name that pass. A name with public and private answers now reaches a public one instead of being refused.
+- The guard requires a secret only the scan's browser has, ignores system proxy settings, and caps one answer at 25 MB, open connections at 128 and a silent server at 15 seconds.
+- `--allow-private` never opens cloud metadata, the guard's own port or the browser's DevTools port.
+- Chrome's own DNS, DNS over HTTPS, prefetch and preloading are off, and WebRTC never sends UDP outside the guard.
 
 - On Windows, `nosy browser install` gives the downloaded browser's helper processes read access to their folder, as Chrome's installer does. Without it the pinned build could not start its network process from a user folder.
 - Software WebGL stays on as a fallback for machines with no GPU, and the result says which kind a scan got.
