@@ -38,9 +38,10 @@ Coming soon with v0.1.0.
 
 ## Quick Start
 
-Nosy needs Google Chrome or Chromium. Check that it finds one:
+Nosy needs a Chrome. Download its own pinned build (checked against a SHA-256 before it is unpacked), or use a Google Chrome or Chromium you have, and check that everything is in place:
 
 ```text
+nosy browser install
 nosy doctor
 ```
 
@@ -62,8 +63,9 @@ A scan opens the site in a new throwaway Chrome profile, scrolls and types into 
 |---------|-------------|
 | `nosy scan <url>` | Open a site in a clean Chrome and report what it does |
 | `nosy check <url>` | Look at a site without a browser: where it leads, what it answers, its first cookies |
+| `nosy browser install\|path\|remove` | Download Nosy's pinned Chrome for Testing, show which browser a scan would use and why, delete what Nosy downloaded |
 | `nosy config list\|get\|set\|path` | Show or change settings |
-| `nosy doctor` | Check that Chrome is found and can start with its sandbox |
+| `nosy doctor` | Check that Chrome is found, recent enough, has its system libraries and starts with its sandbox on |
 | `nosy version` | Print the version |
 | `nosy help [command]` | Show help |
 
@@ -73,6 +75,7 @@ A scan opens the site in a new throwaway Chrome profile, scrolls and types into 
 
 | Command | Flag | Description |
 |---------|------|-------------|
+| `browser install` | `--force` | Download the pinned build again |
 | `scan` | `--duration D` | Longest the visit may last, 10s to 120s (default 20s) |
 | `scan` | `--device D` | `desktop` or `mobile` (default `desktop`) |
 | `scan` | `--gpc` | Send the Global Privacy Control signal |
@@ -93,6 +96,8 @@ Progress is drawn on stderr, and only when stderr is a terminal. Exit codes: 0 d
 | `duration` | `20` | Default for `--duration`, in seconds |
 | `gpc` | `false` | Default for `--gpc` |
 
+A scan uses the first of these that exists: the `chrome` setting, `NOSY_CHROME`, the pinned build from `nosy browser install`, a Google Chrome or Chromium found on your machine. Other Chromium browsers (Edge, Brave) are used only when you give their path. Chrome 120 or newer is required. The sandbox is always on; `nosy doctor` explains what to change if Chrome will not start with it.
+
 Settings live in `config.json` in your user config directory (`nosy config path`). The `NOSY_CHROME` environment variable overrides `chrome`.
 
 ---
@@ -101,11 +106,12 @@ Settings live in `config.json` in your user config directory (`nosy config path`
 
 ```text
 nosy/
-├── cmd/nosy/            # The commands: scan, check, config, doctor
+├── cmd/nosy/            # The commands: scan, check, browser, config, doctor
 ├── internal/
 │   ├── browser/         # Chromium driver: isolated visits, frame and worker capture, page instrumentation
 │   ├── capture/         # What one visit recorded: requests, cookies, API calls, page facts
 │   ├── check/           # The look at a site that needs no browser
+│   ├── chrome/          # Choosing the browser, installing the pinned build, Linux library check
 │   ├── detect/          # Companies, trackers, identifier cookies, session recording, typed-text leaks, bot checks
 │   ├── guard/           # Local proxy that blocks private addresses and pins DNS
 │   ├── integration/     # Planted-page tests against a real Chromium
