@@ -60,14 +60,9 @@ func (s *Site) isolationPages() map[string]http.HandlerFunc {
 		},
 		"xbenign.test": frame(`<form><label>Search <input type="search" name="q"></label></form><script>` + controlJS + `</script>`),
 
-		// a database that stays busy, so the storage read cannot open it
-		"busystore.test": func(w http.ResponseWriter, r *http.Request) {
-			html(w, 200, page("Storage that cannot be read in time", `<script>
-var r = indexedDB.open('busy', 1);
-r.onupgradeneeded = function () {
-  var st = r.result.createObjectStore('s'), n = 0;
-  (function spin() { st.put(n++, 'k').onsuccess = spin; })();
-};</script>`))
+		// the storage plant again; test builds give this host's storage read almost no time
+		"cutshort.test": func(w http.ResponseWriter, r *http.Request) {
+			html(w, 200, page("Storage read cut short", `<script>`+storeJS+`</script>`))
 		},
 
 		// asks for a new window when it loads and again with every key typed

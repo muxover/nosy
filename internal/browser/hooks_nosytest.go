@@ -3,8 +3,10 @@
 package browser
 
 import (
+	"net/url"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/chromedp/chromedp"
 )
@@ -35,4 +37,15 @@ func started(cmd *exec.Cmd) {
 	if Started != nil && cmd != nil && cmd.Process != nil {
 		Started(cmd.Process.Pid)
 	}
+}
+
+// cutShortHost is a planted page whose storage read is given almost no time,
+// so that a read cut short can be tested on any machine.
+const cutShortHost = "cutshort.test"
+
+func budgetFor(target *url.URL, budget time.Duration) time.Duration {
+	if target != nil && target.Hostname() == cutShortHost {
+		return time.Millisecond
+	}
+	return budget
 }

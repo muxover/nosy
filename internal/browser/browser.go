@@ -77,13 +77,14 @@ type Options struct {
 }
 
 type visit struct {
-	o    Options
-	t0   time.Time
-	mu   sync.Mutex
-	reqs []*capture.Request
-	cur  map[string]int
-	kind map[string]network.ResourceType
-	c    *capture.Capture
+	o      Options
+	target *url.URL
+	t0     time.Time
+	mu     sync.Mutex
+	reqs   []*capture.Request
+	cur    map[string]int
+	kind   map[string]network.ResourceType
+	c      *capture.Capture
 
 	hardStop    time.Duration
 	quietCap    time.Duration
@@ -140,6 +141,7 @@ func Visit(ctx context.Context, target *url.URL, o Options) (result *capture.Cap
 	}
 	v := &visit{
 		o:           o,
+		target:      target,
 		hardStop:    hardStop,
 		quietCap:    time.Duration(float64(hardStop) * quietShare),
 		redirects:   map[string]int{},

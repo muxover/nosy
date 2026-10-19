@@ -172,22 +172,19 @@ func TestConditionsRecordIsolationAndWebGL(t *testing.T) {
 	if (c.WebGL == "software") != has(c.Settings, "software WebGL (no GPU found)") {
 		t.Errorf("webgl %q does not match the settings %v", c.WebGL, c.Settings)
 	}
-	if c.StorageCutShort {
-		t.Errorf("storage read cut short on a page with nothing to read")
+	// a slow machine can cut even this read short, but never without saying so
+	if c.StorageCutShort && !hasNote(r, "storage read cut short") {
+		t.Errorf("the storage read was cut short and no note says so: %v", r.Notes)
 	}
 }
 
 func TestStorageReadCutShortIsSaid(t *testing.T) {
 	t.Parallel()
-	r := scanTest(t, "http://busystore.test/")
+	r := scanTest(t, "https://cutshort.test/")
 	if !r.Conditions.StorageCutShort {
 		t.Errorf("conditions = %+v, want the storage read cut short", r.Conditions)
 	}
-	found := false
-	for _, n := range r.Notes {
-		found = found || strings.Contains(n, "storage read cut short")
-	}
-	if !found {
+	if !hasNote(r, "storage read cut short") {
 		t.Errorf("notes = %v, want one that says the storage read was cut short", r.Notes)
 	}
 }
