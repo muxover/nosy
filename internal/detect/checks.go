@@ -16,6 +16,8 @@ import (
 type Technique struct {
 	Name    string   `json:"technique"`
 	Scripts []string `json:"scripts"`
+	// Frames are the origins of the frames the calls ran in.
+	Frames  []string `json:"frames,omitempty"`
 	Calls   int      `json:"calls"`
 	Details []string `json:"details,omitempty"`
 }
@@ -35,6 +37,9 @@ func Fingerprinting(calls []capture.APICall) []Technique {
 		}
 		t.Calls++
 		t.Scripts = appendUnique(t.Scripts, c.Script)
+		if c.Frame != "" && c.Frame != "null" {
+			t.Frames = appendUnique(t.Frames, c.Frame)
+		}
 		if c.Detail != "" && len(t.Details) < 3 {
 			t.Details = appendUnique(t.Details, c.Detail)
 		}
@@ -43,6 +48,7 @@ func Fingerprinting(calls []capture.APICall) []Technique {
 	for _, name := range techniqueOrder {
 		if t := by[name]; t != nil {
 			sort.Strings(t.Scripts)
+			sort.Strings(t.Frames)
 			out = append(out, *t)
 		}
 	}

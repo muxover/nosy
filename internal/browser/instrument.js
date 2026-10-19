@@ -4,6 +4,9 @@
   try { delete window.__nosy; } catch (e) {}
   if (typeof send !== 'function') return;
 
+  var frame = '';
+  try { frame = location.origin; } catch (e) {}
+
   var PER_SCRIPT = 8;
   var seen = {};
 
@@ -19,7 +22,7 @@
     var key = tech + '|' + script;
     seen[key] = (seen[key] || 0) + 1;
     if (seen[key] > PER_SCRIPT) return;
-    try { send(JSON.stringify({ t: 'fp', tech: tech, script: script, detail: detail || '' })); } catch (e) {}
+    try { send(JSON.stringify({ t: 'fp', tech: tech, script: script, frame: frame, detail: detail || '' })); } catch (e) {}
   }
 
   function wrap(proto, name, before) {
@@ -173,11 +176,23 @@
       get: cookie.get,
       set: function (v) {
         try {
-          send(JSON.stringify({ t: 'cookie', name: String(v).split('=')[0].trim(), script: callerScript() }));
+          send(JSON.stringify({ t: 'cookie', name: String(v).split('=')[0].trim(), script: callerScript(), frame: frame }));
         } catch (e) {}
         return cookie.set.call(this, v);
       },
       configurable: true, enumerable: true
+    });
+  }
+
+  // new windows the page asks for: Nosy closes them, and notes the request
+  var open = window.open;
+  if (typeof open === 'function') {
+    Object.defineProperty(window, 'open', {
+      value: function (url) {
+        try { send(JSON.stringify({ t: 'popup', url: String(url == null ? '' : url).slice(0, 300), script: callerScript(), frame: frame })); } catch (e) {}
+        return Reflect.apply(open, this, arguments);
+      },
+      writable: true, configurable: true
     });
   }
 })();

@@ -46,10 +46,6 @@ type Options struct {
 	AllowPrivate bool
 	MaxBytes     int64
 
-	// Remote is the DevTools address of a browser that stays up; the visit gets
-	// a context of its own in it.
-	Remote string
-
 	Progress func(step string)
 	Verbose  func(format string, args ...any)
 
@@ -106,8 +102,12 @@ func Run(ctx context.Context, input string, o Options) (*Result, error) {
 	if o.MaxBytes == 0 {
 		o.MaxBytes = guard.MaxBytes
 	}
+	notes := clearStaleProfiles(o)
 	r, err := visitAndBuild(ctx, target, d, o)
 	if err != nil || r.Status != StatusBlocked {
+		if r != nil {
+			r.Notes = append(notes, r.Notes...)
+		}
 		return r, err
 	}
 	// a first visit can meet a thin page that a second does not (a bot check that
@@ -121,8 +121,23 @@ func Run(ctx context.Context, input string, o Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	again.Notes = append(notes, again.Notes...)
 	again.Notes = append(again.Notes, note+", so the scan was repeated once")
 	return again, nil
+}
+
+// clearStaleProfiles removes what scans that were killed left in the temp
+// folder, and notes any that could not be removed.
+func clearStaleProfiles(o Options) []string {
+	removed, problems := browser.ClearStale()
+	if removed > 0 && o.Verbose != nil {
+		o.Verbose("removed %d browser profile(s) left by earlier scans", removed)
+	}
+	var notes []string
+	for _, p := range problems {
+		notes = append(notes, p.Error())
+	}
+	return notes
 }
 
 // firstVisitNote says what the first visit met, for the note on the second.
@@ -193,7 +208,6 @@ func visit(ctx context.Context, target *url.URL, token string, d *guard.Dialer, 
 		Chrome:   o.Chrome,
 		Proxy:    proxy,
 		Token:    token,
-		Remote:   o.Remote,
 		Duration: o.Duration,
 		Mobile:   o.Mobile,
 		GPC:      o.GPC,
@@ -255,11 +269,9 @@ func Build(target *url.URL, c *capture.Capture, o Options) *Result {
 			DurationMS:           c.Page.Duration.Milliseconds(),
 			Nosy:                 o.Version,
 			Rules:                rules.Version,
-			Settings: []string{
-				"third-party cookies allowed (TrackingProtection3pcd disabled)",
-				"site isolation off",
-				"software WebGL on",
-			},
+			WebGL:                c.Page.WebGL,
+			StorageCutShort:      c.Page.StorageCutShort,
+			Settings:             settings(c.Page.WebGL),
 		},
 		Page: Page{
 			Status: c.Page.MainStatus, TextLen: c.Page.TextLen, Elements: c.Page.Elements,
@@ -326,15 +338,17 @@ func Build(target *url.URL, c *capture.Capture, o Options) *Result {
 	r.Cookies = cookies(&jar, r.Site, rules.Index, ident, now)
 
 	r.Storage = storage(c, r.Site, rules.Index)
+	r.Refused = refused(c)
 	r.Fingerprinting = detect.Fingerprinting(c.APICalls)
 	for _, i := range detect.Replay(reqs, rules.Vendors) {
-		r.SessionRecording = append(r.SessionRecording, Evidence{Request: i, URL: reqs[i].URL})
+		r.SessionRecording = append(r.SessionRecording, Evidence{Request: i, URL: reqs[i].URL, Frame: reqs[i].Frame})
 	}
 	r.TypedText.FieldsTested = c.Page.TypedInto
 	for _, h := range detect.KeyCapture(c.Token, r.Site, reqs, c.WSFrames, rules.Index) {
 		kh := KeyHit{KeyHit: h}
 		if h.Request >= 0 {
 			kh.URL = reqs[h.Request].URL
+			kh.Frame = reqs[h.Request].Frame
 		}
 		r.TypedText.Hits = append(r.TypedText.Hits, kh)
 	}
@@ -359,8 +373,38 @@ func Build(target *url.URL, c *capture.Capture, o Options) *Result {
 	return r
 }
 
+// settings lists the browser settings Nosy changed from a default desktop Chrome.
+func settings(webgl string) []string {
+	s := []string{"third-party cookies allowed (TrackingProtection3pcd disabled)", "site isolation on"}
+	if webgl == "software" {
+		s = append(s, "software WebGL (no GPU found)")
+	}
+	return s
+}
+
+func refused(c *capture.Capture) Refused {
+	r := Refused{PopupsClosed: c.Page.PopupsClosed, LocalAddresses: c.LocalNav}
+	for _, p := range c.Popups {
+		r.Popups = append(r.Popups, Popup{URL: p.URL, Script: p.Script, Frame: p.Frame})
+	}
+	for _, d := range c.Downloads {
+		name := d.Filename
+		if name == "" {
+			name = d.URL
+		}
+		r.Downloads = append(r.Downloads, name)
+	}
+	return r
+}
+
 func visitNotes(c *capture.Capture, limit time.Duration) []string {
 	var n []string
+	if c.Page.StorageCutShort {
+		n = append(n, "storage read cut short: the read ran out of time, so the storage shown may be less than the browser held")
+	}
+	if c.ProfileLeft != "" {
+		n = append(n, "the browser's temporary profile could not be removed: "+c.ProfileLeft)
+	}
 	if c.Page.NeverQuiet {
 		n = append(n, "the network did not go quiet in time, so the scan moved on")
 	}

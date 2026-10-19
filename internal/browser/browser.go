@@ -20,11 +20,11 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
+	cdplog "github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/storage"
-	cdptarget "github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
 	"github.com/muxover/nosy/internal/capture"
@@ -55,6 +55,7 @@ const (
 	maxPostData = 64 << 10
 	maxHTML     = 300 << 10
 	maxFields   = 10
+	maxPopups   = 20
 )
 
 type Options struct {
@@ -62,7 +63,6 @@ type Options struct {
 	Proxy   *guard.Proxy
 	Token   string // text to type into fields
 	NetLog  string // write the browser's own network log here
-	Remote  string // DevTools address of a browser that stays up; the visit gets a context of its own in it
 	Verbose func(format string, args ...any)
 
 	// Duration is the longest the visit may last; HardStop when zero.
@@ -88,11 +88,13 @@ type visit struct {
 	hardStop    time.Duration
 	quietCap    time.Duration
 	mainFrame   cdp.FrameID
-	contextID   cdp.BrowserContextID // this visit's own browser context, empty when it has the browser to itself
-	redirects   map[string]int       // redirects followed per main-frame request
+	redirects   map[string]int // redirects followed per main-frame request
 	stop        context.CancelFunc
 	parent      context.Context // the browser, still alive after the hard stop
 	attachedIDs map[string]bool
+	mainTarget  string     // the target of the page; any other page is a window the page opened
+	childCmds   []childCmd // what a frame in another process gets before it runs
+	dt          *devtools
 	lastNet     atomic.Int64
 	sawNet      atomic.Bool
 	loadMS      atomic.Int64
@@ -100,55 +102,37 @@ type visit struct {
 
 // Visit loads target once as a first-time visitor and records everything.
 // The browser profile is created fresh and deleted before returning.
-func Visit(ctx context.Context, target *url.URL, o Options) (*capture.Capture, error) {
-	var (
-		cmd          *exec.Cmd
-		address      = o.Remote
-		chromeCtx    context.Context
-		cancelChrome context.CancelFunc
-		contextID    cdp.BrowserContextID
-	)
-	if o.Remote != "" {
-		// a browser that stays up: this visit gets a browser context of its own,
-		// with no cookies, cache, storage or service workers from any other visit,
-		// and its own way out through our proxy. The context and everything in it
-		// is disposed of when the visit ends, and by the browser itself if the
-		// connection is lost first.
-		allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(ctx, o.Remote)
-		defer cancelAlloc()
-		var closeContext func()
-		var err error
-		if chromeCtx, contextID, closeContext, err = ownContext(allocCtx, o); err != nil {
-			return nil, fmt.Errorf("start browser: %w", err)
-		}
-		defer closeContext()
-	} else {
-		profile, err := os.MkdirTemp("", "nosy-profile-")
-		if err != nil {
-			return nil, err
-		}
-		defer removeProfile(profile)
-		if err := writePreferences(profile); err != nil {
-			return nil, err
-		}
-		port, err := freePort()
-		if err != nil {
-			return nil, err
-		}
-		address = fmt.Sprintf("http://127.0.0.1:%d", port)
-		opts := allocatorOptions(profile, port, o)
-		opts = append(opts, chromedp.ModifyCmdFunc(func(c *exec.Cmd) {
-			confine(c)
-			cmd = c
-		}))
-		allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
-		defer cancelAlloc()
-		chromeCtx, cancelChrome = chromedp.NewContext(allocCtx)
-		defer func() {
-			cancelChrome()
-			killTree(cmd)
-		}()
+func Visit(ctx context.Context, target *url.URL, o Options) (result *capture.Capture, err error) {
+	profile, err := newProfile()
+	if err != nil {
+		return nil, err
 	}
+	defer func() {
+		if rerr := removeProfile(profile); rerr != nil && result != nil {
+			result.ProfileLeft = rerr.Error()
+		}
+	}()
+	if err := writePreferences(profile); err != nil {
+		return nil, err
+	}
+	port, err := freePort()
+	if err != nil {
+		return nil, err
+	}
+	address := fmt.Sprintf("http://127.0.0.1:%d", port)
+	var cmd *exec.Cmd
+	opts := allocatorOptions(profile, port, o)
+	opts = append(opts, chromedp.ModifyCmdFunc(func(c *exec.Cmd) {
+		confine(c)
+		cmd = c
+	}))
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
+	defer cancelAlloc()
+	chromeCtx, cancelChrome := chromedp.NewContext(allocCtx)
+	defer func() {
+		cancelChrome()
+		killTree(cmd)
+	}()
 
 	hardStop := o.Duration
 	if hardStop <= 0 {
@@ -158,7 +142,6 @@ func Visit(ctx context.Context, target *url.URL, o Options) (*capture.Capture, e
 		o:           o,
 		hardStop:    hardStop,
 		quietCap:    time.Duration(float64(hardStop) * quietShare),
-		contextID:   contextID,
 		redirects:   map[string]int{},
 		cur:         map[string]int{},
 		kind:        map[string]network.ResourceType{},
@@ -176,9 +159,14 @@ func Visit(ctx context.Context, target *url.URL, o Options) (*capture.Capture, e
 		return nil, fmt.Errorf("start browser: %w", err)
 	}
 
+	started(cmd)
+	if c := chromedp.FromContext(chromeCtx); c != nil && c.Target != nil {
+		v.mainTarget = string(c.Target.TargetID)
+	}
 	if d, err := v.watchChildren(visitCtx, address); err != nil {
-		v.logf("worker traffic is not recorded: %v", err)
+		v.logf("frames and workers in other processes are not recorded: %v", err)
 	} else {
+		v.dt = d
 		defer d.Close()
 	}
 
@@ -198,7 +186,7 @@ func Visit(ctx context.Context, target *url.URL, o Options) (*capture.Capture, e
 	watchdog.Stop()
 
 	// the browser writes its network log when it closes itself, not when killed
-	if v.o.NetLog != "" && v.o.Remote == "" {
+	if v.o.NetLog != "" {
 		cctx, ccancel := context.WithTimeout(chromeCtx, 2*time.Second)
 		_ = chromedp.Run(cctx, chromedp.ActionFunc(func(ctx context.Context) error { return browser.Close().Do(ctx) }))
 		ccancel()
@@ -206,54 +194,10 @@ func Visit(ctx context.Context, target *url.URL, o Options) (*capture.Capture, e
 		waitExit(cmd, 4*time.Second)
 		time.Sleep(2 * time.Second)
 	}
-	if o.Remote == "" {
-		cancelChrome()
-		killTree(cmd)
-	}
+	cancelChrome()
+	killTree(cmd)
 	v.finish()
 	return v.c, nil
-}
-
-// ownContext opens a browser context for one visit in a browser that stays up,
-// with a window and a tab in it. A context needs a window of its own: without
-// one the browser cannot open a tab in it. The first, empty tab only holds the
-// connection and is closed with the context.
-func ownContext(allocCtx context.Context, o Options) (tab context.Context, id cdp.BrowserContextID, closeAll func(), err error) {
-	hold, cancelHold := chromedp.NewContext(allocCtx)
-	var targetID cdptarget.ID
-	err = chromedp.Run(hold, chromedp.ActionFunc(func(ctx context.Context) error {
-		ex := cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Browser)
-		var err error
-		id, err = cdptarget.CreateBrowserContext().
-			WithDisposeOnDetach(true).
-			WithProxyServer("http://" + o.Proxy.Addr()).
-			WithProxyBypassList("<-loopback>").Do(ex)
-		if err != nil {
-			return err
-		}
-		targetID, err = cdptarget.CreateTarget("about:blank").WithBrowserContextID(id).WithNewWindow(true).Do(ex)
-		return err
-	}))
-	if err != nil {
-		cancelHold()
-		return nil, "", nil, err
-	}
-	tab, cancelTab := chromedp.NewContext(hold, chromedp.WithTargetID(targetID))
-	closeAll = func() {
-		cancelTab()
-		// everything the visit stored goes with the context; if the browser is
-		// already gone there is nothing left to dispose of
-		cctx, cancel := context.WithTimeout(hold, 3*time.Second)
-		defer cancel()
-		err := chromedp.Run(cctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			return cdptarget.DisposeBrowserContext(id).Do(cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Browser))
-		}))
-		if err != nil {
-			o.logf("close the browser context: %v", err)
-		}
-		cancelHold()
-	}
-	return tab, id, closeAll, nil
 }
 
 func allocatorOptions(profile string, port int, o Options) []chromedp.ExecAllocatorOption {
@@ -285,13 +229,14 @@ func allocatorOptions(profile string, port int, o Options) []chromedp.ExecAlloca
 		chromedp.Flag("disable-sync", true),
 		chromedp.Flag("disable-default-apps", true),
 		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-component-extensions-with-background-pages", true),
+		chromedp.Flag("deny-permission-prompts", true),
 		chromedp.Flag("disable-domain-reliability", true),
 		chromedp.Flag("disable-client-side-phishing-detection", true),
-		chromedp.Flag("disable-site-isolation-trials", true),
 		// TrackingProtection3pcd: Chromium 141 blocks third-party cookies with the
 		// reason ThirdPartyPhaseout whatever the profile says, which hides every
 		// tracker cookie from the scan
-		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process,Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,TrackingProtection3pcd"),
+		chromedp.Flag("disable-features", "Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,TrackingProtection3pcd"),
 		chromedp.Flag("metrics-recording-only", true),
 		chromedp.Flag("mute-audio", true),
 		chromedp.Flag("hide-scrollbars", true),
@@ -376,15 +321,29 @@ func (v *visit) setup(ctx context.Context) error {
 			if scr.mobile {
 				meta.Architecture, meta.Bitness, meta.Model = "", "", "K"
 			}
-			return emulation.SetUserAgentOverride(ua).
+			override := emulation.SetUserAgentOverride(ua).
 				WithAcceptLanguage("en-US,en;q=0.9").
 				WithPlatform(platform).
-				WithUserAgentMetadata(meta).Do(ctx)
+				WithUserAgentMetadata(meta)
+			v.childCmds = append(v.childCmds, childCmd{emulation.CommandSetUserAgentOverride, override})
+			return override.Do(ctx)
 		}),
 		emulation.SetDeviceMetricsOverride(int64(scr.width), int64(scr.height), scr.scale, scr.mobile),
 	}
+	v.childCmds = append(v.childCmds,
+		childCmd{network.CommandEnable, network.Enable()},
+		childCmd{page.CommandEnable, page.Enable()},
+		childCmd{cdplog.CommandEnable, cdplog.Enable()},
+		childCmd{runtime.CommandEnable, runtime.Enable()},
+		childCmd{runtime.CommandAddBinding, runtime.AddBinding(bindingName)},
+		childCmd{page.CommandAddScriptToEvaluateOnNewDocument, page.AddScriptToEvaluateOnNewDocument(instrument)},
+		childCmd{emulation.CommandSetLocaleOverride, emulation.SetLocaleOverride().WithLocale("en-US")},
+		childCmd{emulation.CommandSetFocusEmulationEnabled, emulation.SetFocusEmulationEnabled(true)},
+	)
 	if scr.mobile {
-		actions = append(actions, emulation.SetTouchEmulationEnabled(true).WithMaxTouchPoints(5))
+		touch := emulation.SetTouchEmulationEnabled(true).WithMaxTouchPoints(5)
+		actions = append(actions, touch)
+		v.childCmds = append(v.childCmds, childCmd{emulation.CommandSetTouchEmulationEnabled, touch})
 	}
 	actions = append(actions,
 		emulation.SetLocaleOverride().WithLocale("en-US"),
@@ -395,6 +354,7 @@ func (v *visit) setup(ctx context.Context) error {
 		network.ClearBrowserCookies(),
 		network.ClearBrowserCache(),
 		page.Enable(),
+		cdplog.Enable(),
 		runtime.Enable(),
 		runtime.AddBinding(bindingName),
 		chromedp.ActionFunc(func(ctx context.Context) error {
@@ -403,6 +363,10 @@ func (v *visit) setup(ctx context.Context) error {
 		}),
 	)
 	if v.o.GPC {
+		v.childCmds = append(v.childCmds,
+			childCmd{network.CommandSetExtraHTTPHeaders, network.SetExtraHTTPHeaders(network.Headers{"Sec-GPC": "1"})},
+			childCmd{page.CommandAddScriptToEvaluateOnNewDocument, page.AddScriptToEvaluateOnNewDocument(gpcScript)},
+		)
 		actions = append(actions,
 			network.SetExtraHTTPHeaders(network.Headers{"Sec-GPC": "1"}),
 			chromedp.ActionFunc(func(ctx context.Context) error {
@@ -419,7 +383,38 @@ func (v *visit) setup(ctx context.Context) error {
 			return fmt.Errorf("configure %T: %w", a, err)
 		}
 	}
+	v.probeWebGL(ctx)
 	return nil
+}
+
+// the blank tab is asked for a WebGL context before the page loads, so that no
+// page script sees the question
+const webglJS = `(function () {
+  try {
+    var c = document.createElement('canvas');
+    var g = c.getContext('webgl') || c.getContext('experimental-webgl');
+    if (!g) return 'none';
+    var e = g.getExtension('WEBGL_debug_renderer_info');
+    var name = e ? String(g.getParameter(e.UNMASKED_RENDERER_WEBGL)) : '';
+    return /swiftshader|llvmpipe|software|basic render/i.test(name) ? 'software' : 'hardware';
+  } catch (x) { return 'none'; }
+})()`
+
+// probeWebGL records what scripts get when they ask for WebGL.
+func (v *visit) probeWebGL(ctx context.Context) {
+	var kind string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(webglJS, &kind)); err != nil {
+		v.logf("webgl: %v", err)
+		return
+	}
+	v.mu.Lock()
+	v.c.Page.WebGL = kind
+	v.mu.Unlock()
+}
+
+// isPopup is true for a page that is not the one the visit opened.
+func (v *visit) isPopup(target string) bool {
+	return v.mainTarget != "" && target != v.mainTarget
 }
 
 func (v *visit) step(s string) {
@@ -579,11 +574,11 @@ func (v *visit) typeIntoFields(ctx context.Context) {
 	cctx, cancel := context.WithTimeout(ctx, typeMax)
 	defer cancel()
 	var n int
+	typed := 0
 	if err := chromedp.Run(cctx, chromedp.Evaluate(fmt.Sprintf(fieldsJS, maxFields), &n)); err != nil {
 		v.logf("find fields: %v", err)
-		return
+		n = 0
 	}
-	typed := 0
 	for i := 0; i < n && cctx.Err() == nil; i++ {
 		err := chromedp.Run(cctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			if _, exp, err := runtime.Evaluate(fmt.Sprintf(`document.querySelector('[data-nosy-field="%d"]').focus()`, i)).Do(ctx); err != nil || exp != nil {
@@ -604,6 +599,7 @@ func (v *visit) typeIntoFields(ctx context.Context) {
 			typed++
 		}
 	}
+	typed += v.typeIntoFrames(cctx)
 	v.mu.Lock()
 	v.c.Page.TypedInto = typed
 	v.mu.Unlock()
@@ -648,13 +644,6 @@ func (v *visit) collect(ctx context.Context, budget time.Duration) {
 	var cookies []*network.Cookie
 	if err := chromedp.Run(cctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		var err error
-		if v.contextID != "" {
-			// the cookie jar of this visit's own context, not the browser's default one;
-			// the browser answers this one, not the page
-			ex := cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Browser)
-			cookies, err = storage.GetCookies().WithBrowserContextID(v.contextID).Do(ex)
-			return err
-		}
 		cookies, err = storage.GetCookies().Do(ctx)
 		return err
 	})); err != nil {
@@ -685,6 +674,10 @@ func (v *visit) collect(ctx context.Context, budget time.Duration) {
 	v.mu.Unlock()
 	if !over {
 		v.collectStorage(ctx)
+	} else {
+		v.mu.Lock()
+		v.c.Page.StorageCutShort = true
+		v.mu.Unlock()
 	}
 
 	v.fetchPostData(cctx)
@@ -712,8 +705,9 @@ func (v *visit) fetchPostData(ctx context.Context) {
 	var ids []string
 	for id, i := range v.cur {
 		r := v.reqs[i]
-		// only the page's own requests: other targets have their own sessions
-		if r.Method != "GET" && r.PostData == "" && len(ids) < 50 && !strings.Contains(id, "|") {
+		// the page's own requests, and those of frames in other processes, which
+		// are asked over their own sessions
+		if r.Method != "GET" && r.PostData == "" && len(ids) < 50 {
 			ids = append(ids, id)
 		}
 	}
@@ -722,12 +716,7 @@ func (v *visit) fetchPostData(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		var body string
-		err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			b, err := network.GetRequestPostData(network.RequestID(id)).Do(ctx)
-			body = string(b)
-			return err
-		}))
+		body, err := v.postData(ctx, id)
 		if err != nil || body == "" {
 			continue
 		}
@@ -737,6 +726,39 @@ func (v *visit) fetchPostData(ctx context.Context) {
 		}
 		v.mu.Unlock()
 	}
+}
+
+// postData asks for the body of one request: from the page's own session, or
+// from the session of the frame that made it.
+func (v *visit) postData(ctx context.Context, id string) (string, error) {
+	target, reqID, other := strings.Cut(id, "|")
+	if !other {
+		var body string
+		err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			b, err := network.GetRequestPostData(network.RequestID(id)).Do(ctx)
+			body = string(b)
+			return err
+		}))
+		return body, err
+	}
+	if v.dt == nil {
+		return "", nil
+	}
+	session, ok := v.dt.sessionOf(target)
+	if !ok {
+		return "", nil
+	}
+	res, err := v.dt.call(ctx, session, "Network.getRequestPostData", map[string]any{"requestId": reqID})
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		PostData string `json:"postData"`
+	}
+	if err := json.Unmarshal(res, &out); err != nil {
+		return "", err
+	}
+	return out.PostData, nil
 }
 
 func clip(s string, n int) string {
@@ -809,25 +831,33 @@ func decodeEntries(es []*network.PostDataEntry) string {
 // writePreferences starts the fresh profile the way a default desktop
 // Chrome behaves: third-party cookies allowed. Some Chromium builds block
 // them out of the box, which would hide every tracker cookie from the scan.
+// Permissions are denied and downloads go nowhere outside the profile, which
+// is deleted with it.
 func writePreferences(profile string) error {
 	dir := filepath.Join(profile, "Default")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	prefs := `{"profile":{"cookie_controls_mode":0,"default_content_setting_values":{"cookies":1}}}`
-	return os.WriteFile(filepath.Join(dir, "Preferences"), []byte(prefs), 0o600)
-}
-
-// removeProfile deletes a profile directory. The browser's helper processes may
-// still be closing files in it just after the browser is killed, so a failed
-// removal is retried for a couple of seconds.
-func removeProfile(dir string) {
-	for i := 0; i < 20; i++ {
-		if os.RemoveAll(dir) == nil {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	prefs := map[string]any{
+		"profile": map[string]any{
+			"cookie_controls_mode": 0,
+			"default_content_setting_values": map[string]any{
+				"cookies": 1, "geolocation": 2, "notifications": 2, "media_stream_mic": 2,
+				"media_stream_camera": 2, "midi_sysex": 2, "clipboard": 2, "sensors": 2,
+				"automatic_downloads": 2,
+			},
+		},
+		"download": map[string]any{
+			"prompt_for_download": false,
+			"default_directory":   filepath.Join(profile, "downloads"),
+		},
+		"savefile": map[string]any{"default_directory": filepath.Join(profile, "downloads")},
 	}
+	b, err := json.Marshal(prefs)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "Preferences"), b, 0o600)
 }
 
 // noSandboxOff keeps the sandbox on. chromedp adds --no-sandbox by itself when

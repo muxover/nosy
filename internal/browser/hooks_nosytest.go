@@ -4,6 +4,7 @@ package browser
 
 import (
 	"os"
+	"os/exec"
 
 	"github.com/chromedp/chromedp"
 )
@@ -25,4 +26,13 @@ func testFlags() []chromedp.ExecAllocatorOption {
 		opts = append(opts, chromedp.ExecPath(p))
 	}
 	return opts
+}
+
+// Started, when set, is called with the browser's process number once it runs.
+var Started func(pid int)
+
+func started(cmd *exec.Cmd) {
+	if Started != nil && cmd != nil && cmd.Process != nil {
+		Started(cmd.Process.Pid)
+	}
 }

@@ -17,6 +17,7 @@ type Request struct {
 	MIME      string `json:"mime,omitempty"`
 	Bytes     int64  `json:"bytes"`
 	Initiator string `json:"initiator,omitempty"`
+	Frame     string `json:"frame,omitempty"` // origin of the document that made the request
 	Failed    string `json:"failed,omitempty"`
 	Refused   bool   `json:"refused,omitempty"`
 	Answered  bool   `json:"answered,omitempty"` // the server replied, but the browser blocked the page from reading it
@@ -61,6 +62,7 @@ type Cookie struct {
 type APICall struct {
 	Technique string `json:"technique"` // canvas, webgl, audio, fonts
 	Script    string `json:"script"`
+	Frame     string `json:"frame,omitempty"` // origin of the frame the call ran in
 	Detail    string `json:"detail,omitempty"`
 }
 
@@ -68,34 +70,53 @@ type APICall struct {
 type CookieWrite struct {
 	Name   string
 	Script string
+	Frame  string
+}
+
+// Popup is a new window the page asked for. Nosy closes it before it loads.
+type Popup struct {
+	URL    string
+	Script string
+	Frame  string
+}
+
+// Download is a file the page tried to download. Nosy refuses every download.
+type Download struct {
+	URL      string
+	Filename string
+	GUID     string
+	State    string // the browser's last word on it: inProgress, completed or canceled
 }
 
 type Page struct {
-	Title        string
-	Text         string // visible text, for blocked-page checks
-	TextLen      int
-	Elements     int
-	HTML         string
-	Scripts      []string
-	Meta         map[string][]string
-	Headers      map[string][]string
-	ConsentAPIs  []string
-	TypedInto    int
-	LoadMS       int64
-	NeverQuiet   bool
-	MainStatus   int
-	MainError    string
-	FinalURL     string
-	ScannedAt    time.Time
-	Duration     time.Duration
-	Chromium     string
-	UserAgent    string
-	Device       string // desktop or mobile
-	Viewport     string
-	GPC          bool // the Global Privacy Control signal was sent
-	SizeCapHit   bool
-	TimeLimitHit bool
-	Crashed      bool // the page's renderer crashed during the visit
+	Title           string
+	Text            string // visible text, for blocked-page checks
+	TextLen         int
+	Elements        int
+	HTML            string
+	Scripts         []string
+	Meta            map[string][]string
+	Headers         map[string][]string
+	ConsentAPIs     []string
+	TypedInto       int
+	LoadMS          int64
+	NeverQuiet      bool
+	MainStatus      int
+	MainError       string
+	FinalURL        string
+	ScannedAt       time.Time
+	Duration        time.Duration
+	Chromium        string
+	UserAgent       string
+	Device          string // desktop or mobile
+	Viewport        string
+	GPC             bool // the Global Privacy Control signal was sent
+	SizeCapHit      bool
+	TimeLimitHit    bool
+	Crashed         bool   // the page's renderer crashed during the visit
+	PopupsClosed    int    // new windows the page opened, closed before they loaded anything
+	StorageCutShort bool   // the storage read ran out of time and shows less than the browser holds
+	WebGL           string // hardware, software or none: what the browser gave scripts that ask for WebGL
 }
 
 // Capture is everything one visit recorded.
@@ -107,7 +128,11 @@ type Capture struct {
 	APICalls     []APICall
 	WSFrames     []WSFrame // messages the page sent over WebSockets
 	Storage      []Storage // what the page and its frames stored in the browser
-	Token        string    // text typed into fields for the key-capture check
+	Popups       []Popup
+	Downloads    []Download
+	LocalNav     []string // addresses on this machine (file:, chrome: and the like) the page tried to open
+	ProfileLeft  string   // why the temporary browser profile could not be removed, empty when it was
+	Token        string   // text typed into fields for the key-capture check
 	Proxy        guard.Stats
 }
 

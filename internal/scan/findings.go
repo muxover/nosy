@@ -55,6 +55,7 @@ func findings(r *Result, p detect.Parties) []Finding {
 	if p.AdTech {
 		add("ad-tech", Classified, "At least one of them is an advertising company.")
 	}
+	refusedFindings(r, add)
 	var ids []string
 	for _, c := range r.Cookies {
 		if c.Identifier {
@@ -189,4 +190,24 @@ func (r *Result) serviceWorkerCount() int {
 		n += len(o.ServiceWorkers)
 	}
 	return n
+}
+
+// refusedFindings reports what the page asked for that Nosy does not allow.
+func refusedFindings(r *Result, add func(id, label, text string, evidence ...string)) {
+	if n := max(len(r.Refused.Popups), r.Refused.PopupsClosed); n > 0 {
+		var ev []string
+		for _, p := range r.Refused.Popups {
+			ev = append(ev, strings.TrimSpace(p.URL+" "+p.Script))
+		}
+		add("popups", Observed,
+			fmt.Sprintf("The page tried to open %d new %s. Nosy never loads one.", n, plural(n, "window", "windows")), ev...)
+	}
+	if n := len(r.Refused.Downloads); n > 0 {
+		add("downloads", Observed,
+			fmt.Sprintf("The page tried to download %d %s. Nosy refuses every download.", n, plural(n, "file", "files")), r.Refused.Downloads...)
+	}
+	if n := len(r.Refused.LocalAddresses); n > 0 {
+		add("local-addresses", Observed,
+			fmt.Sprintf("The page tried to open %d %s on this machine. The browser refused them.", n, plural(n, "address", "addresses")), r.Refused.LocalAddresses...)
+	}
 }

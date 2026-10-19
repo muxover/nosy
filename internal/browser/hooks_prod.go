@@ -2,6 +2,12 @@
 
 package browser
 
-import "github.com/chromedp/chromedp"
+import (
+	"os/exec"
+
+	"github.com/chromedp/chromedp"
+)
 
 func testFlags() []chromedp.ExecAllocatorOption { return nil }
+
+func started(*exec.Cmd) {}

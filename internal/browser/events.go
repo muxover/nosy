@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/inspector"
+	cdplog "github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -83,6 +84,13 @@ func (v *visit) handler(ctx context.Context, session string) func(ev any) {
 				}
 				v.mu.Unlock()
 			}
+		case *page.EventFrameRequestedNavigation:
+			v.onNavigationRequest(e.URL)
+		case *cdplog.EventEntryAdded:
+			// the browser says so when a page reaches for a local file
+			if _, raw, ok := strings.Cut(e.Entry.Text, "Not allowed to load local resource: "); ok {
+				v.onNavigationRequest(strings.TrimSpace(raw))
+			}
 		case *page.EventLoadEventFired:
 			if session == "" {
 				v.loadMS.Store(time.Since(v.t0).Milliseconds())
@@ -141,11 +149,25 @@ func (v *visit) onRequest(key string, e *network.EventRequestWillBeSent) {
 		initiator = initiatorURL(e.Initiator)
 	}
 	id := v.addRequest(key, e.Request.URL, e.Request.Method, string(e.Type), initiator, main)
+	if id >= 0 {
+		v.mu.Lock()
+		v.reqs[id].Frame = originOf(e.DocumentURL)
+		v.mu.Unlock()
+	}
 	if id >= 0 && len(e.Request.PostDataEntries) > 0 {
 		v.mu.Lock()
 		v.reqs[id].PostData = decodeEntries(e.Request.PostDataEntries)
 		v.mu.Unlock()
 	}
+}
+
+// originOf is the origin of a document address, empty for anything but http and https.
+func originOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + strings.ToLower(u.Host)
 }
 
 func (v *visit) frameID() string {
@@ -281,6 +303,27 @@ type bindingMsg struct {
 	Script string `json:"script"`
 	Detail string `json:"detail"`
 	Name   string `json:"name"`
+	Frame  string `json:"frame"`
+	URL    string `json:"url"`
+}
+
+// onNavigationRequest notes a page trying to open an address on this machine.
+// The browser refuses these itself; Nosy records the attempt.
+func (v *visit) onNavigationRequest(raw string) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" {
+		return
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "file", "filesystem", "chrome", "chrome-untrusted", "chrome-extension", "devtools", "view-source", "ftp":
+	default:
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if len(v.c.LocalNav) < maxPopups {
+		v.c.LocalNav = append(v.c.LocalNav, clip(raw, 300))
+	}
 }
 
 func (v *visit) onBinding(payload string) {
@@ -290,11 +333,19 @@ func (v *visit) onBinding(payload string) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	script := m.Script
+	if script == "inline" && m.Frame != "" && m.Frame != "null" {
+		script = "inline in " + m.Frame
+	}
 	switch m.T {
 	case "fp":
-		v.c.APICalls = append(v.c.APICalls, capture.APICall{Technique: m.Tech, Script: m.Script, Detail: m.Detail})
+		v.c.APICalls = append(v.c.APICalls, capture.APICall{Technique: m.Tech, Script: script, Frame: m.Frame, Detail: m.Detail})
 	case "cookie":
-		v.c.CookieWrites = append(v.c.CookieWrites, capture.CookieWrite{Name: m.Name, Script: m.Script})
+		v.c.CookieWrites = append(v.c.CookieWrites, capture.CookieWrite{Name: m.Name, Script: script, Frame: m.Frame})
+	case "popup":
+		if len(v.c.Popups) < maxPopups {
+			v.c.Popups = append(v.c.Popups, capture.Popup{URL: m.URL, Script: script, Frame: m.Frame})
+		}
 	}
 }
 

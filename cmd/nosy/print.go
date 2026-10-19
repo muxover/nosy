@@ -88,6 +88,9 @@ func printSummary(w io.Writer, r *scan.Result) {
 	if c.GPC {
 		fmt.Fprintln(w, "            Global Privacy Control sent")
 	}
+	if c.StorageCutShort {
+		fmt.Fprintln(w, "            storage read cut short")
+	}
 }
 
 func printChecks(w io.Writer, r *check.Result) {

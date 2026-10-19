@@ -56,6 +56,7 @@ type Result struct {
 	Companies        []detect.Company   `json:"companies"`
 	Requests         []capture.Request  `json:"requests"`
 	Cookies          []Cookie           `json:"cookies"`
+	Refused          Refused            `json:"refused"`
 	Storage          []StorageOrigin    `json:"storage"`
 	Fingerprinting   []detect.Technique `json:"fingerprinting"`
 	SessionRecording []Evidence         `json:"session_recording"`
@@ -72,18 +73,39 @@ type Conditions struct {
 	// BrowserSource is why this browser was used: config, env, pinned or system.
 	BrowserSource string `json:"browser_source"`
 	// BrowserPinned is true when it was Nosy's own Chrome for Testing build.
-	BrowserPinned        bool     `json:"browser_pinned"`
-	UserAgent            string   `json:"user_agent"`
-	Device               string   `json:"device"`
-	Viewport             string   `json:"viewport"`
-	Locale               string   `json:"locale"`
-	ConsentMode          string   `json:"consent_mode"`
-	GPC                  bool     `json:"gpc"`
-	DurationLimitSeconds int      `json:"duration_limit_seconds"`
-	DurationMS           int64    `json:"duration_ms"`
-	Nosy                 string   `json:"nosy"`
-	Rules                string   `json:"rules"`
-	Settings             []string `json:"settings"`
+	BrowserPinned        bool   `json:"browser_pinned"`
+	UserAgent            string `json:"user_agent"`
+	Device               string `json:"device"`
+	Viewport             string `json:"viewport"`
+	Locale               string `json:"locale"`
+	ConsentMode          string `json:"consent_mode"`
+	GPC                  bool   `json:"gpc"`
+	DurationLimitSeconds int    `json:"duration_limit_seconds"`
+	DurationMS           int64  `json:"duration_ms"`
+	// WebGL is what scripts got when they asked for it: hardware, software or none.
+	WebGL string `json:"webgl"`
+	// StorageCutShort is true when the storage read ran out of time and the
+	// result shows less storage than the browser held.
+	StorageCutShort bool     `json:"storage_cut_short,omitempty"`
+	Nosy            string   `json:"nosy"`
+	Rules           string   `json:"rules"`
+	Settings        []string `json:"settings"`
+}
+
+// Refused is what the page asked for that Nosy never allows: new windows,
+// downloads and addresses on this machine.
+type Refused struct {
+	Popups         []Popup  `json:"popups,omitempty"`
+	PopupsClosed   int      `json:"popups_closed,omitempty"`
+	Downloads      []string `json:"downloads,omitempty"`
+	LocalAddresses []string `json:"local_addresses,omitempty"`
+}
+
+// Popup is a new window the page asked for.
+type Popup struct {
+	URL    string `json:"url"`
+	Script string `json:"script,omitempty"`
+	Frame  string `json:"frame,omitempty"`
 }
 
 // Finding is one thing the scan found, in a sentence, with how it is known.
@@ -124,6 +146,8 @@ type Cookie struct {
 type Evidence struct {
 	Request int    `json:"request"`
 	URL     string `json:"url"`
+	// Frame is the origin of the document that made the request.
+	Frame string `json:"frame,omitempty"`
 }
 
 type TypedText struct {
@@ -133,7 +157,8 @@ type TypedText struct {
 
 type KeyHit struct {
 	detect.KeyHit
-	URL string `json:"url,omitempty"`
+	URL   string `json:"url,omitempty"`
+	Frame string `json:"frame,omitempty"`
 }
 
 // StorageOrigin is what one frame origin kept in the browser. Third-party

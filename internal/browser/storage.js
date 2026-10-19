@@ -3,7 +3,7 @@
   var out = { origin: location.origin, local: [], session: [], idb: [], caches: [], sw: [] };
   function clip(s) { s = String(s); return s.length > CAP.value ? s.slice(0, CAP.value) : s; }
   function within(p, ms) {
-    return Promise.race([p, new Promise(function (_, reject) { setTimeout(function () { reject(new Error('timeout')); }, ms); })]);
+    return Promise.race([p, new Promise(function (_, reject) { setTimeout(function () { out.cut = true; reject(new Error('timeout')); }, ms); })]);
   }
 
   function items(store) {
