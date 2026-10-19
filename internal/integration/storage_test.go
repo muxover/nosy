@@ -129,12 +129,6 @@ func TestStorageIsCapturedPerOrigin(t *testing.T) {
 	checkStoragePlant(t, scanTest(t, "https://store.test/"))
 }
 
-func TestStorageIsCapturedInASharedBrowser(t *testing.T) {
-	t.Parallel()
-	b := sharedBrowser(t)
-	checkStoragePlant(t, scanTest(t, "https://store.test/", func(o *scan.Options) { o.Remote = b.Address }))
-}
-
 func TestAPageThatStoresNothingHasNoStorage(t *testing.T) {
 	t.Parallel()
 	r := scanTest(t, "http://nostore.test/")

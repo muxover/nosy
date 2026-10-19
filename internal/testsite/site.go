@@ -40,11 +40,13 @@ type Site struct {
 	servers []*http.Server
 	lns     []net.Listener
 
-	mu       sync.Mutex
-	envHits  []EnvHit
-	hits     map[string][]string
-	counters map[string]int
-	targets  []string
+	mu        sync.Mutex
+	envHits   []EnvHit
+	hits      map[string][]string
+	localFile string
+	reqs      []Request
+	counters  map[string]int
+	targets   []string
 
 	ca     *x509.Certificate
 	caKey  *ecdsa.PrivateKey
@@ -137,6 +139,25 @@ func (s *Site) Close() {
 	}
 }
 
+// Request is one request the server answered, and whether it came over TLS.
+type Request struct {
+	Host, Path, Query string
+	TLS               bool
+}
+
+// Requests lists the requests made to host so far, in order.
+func (s *Site) Requests(host string) []Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Request
+	for _, r := range s.reqs {
+		if r.Host == host {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // Hits lists the paths requested from host so far.
 func (s *Site) Hits(host string) []string {
 	s.mu.Lock()
@@ -215,6 +236,7 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request) {
 	host := hostOnly(r.Host)
 	s.mu.Lock()
 	s.hits[host] = append(s.hits[host], r.URL.Path)
+	s.reqs = append(s.reqs, Request{Host: host, Path: r.URL.Path, Query: r.URL.RawQuery, TLS: r.TLS != nil})
 	s.mu.Unlock()
 	if h, ok := s.route(host); ok {
 		h(w, r)

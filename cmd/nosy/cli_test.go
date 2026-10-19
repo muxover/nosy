@@ -367,6 +367,17 @@ func TestSummaryShowsTheScoreCountsFindingsAndConditions(t *testing.T) {
 		t.Errorf("summary has an ellipsis:\n%s", got)
 	}
 
+	cut := sampleResult()
+	cut.Conditions.StorageCutShort = true
+	out.Reset()
+	printSummary(&out, cut)
+	if !strings.Contains(out.String(), "storage read cut short") {
+		t.Errorf("a cut-short storage read is not in the conditions:\n%s", out.String())
+	}
+	if strings.Contains(got, "storage read cut short") {
+		t.Errorf("a complete storage read says it was cut short:\n%s", got)
+	}
+
 	blocked := sampleResult()
 	blocked.Score, blocked.Status, blocked.Reason = nil, scan.StatusBlocked, "the site showed a bot check"
 	out.Reset()

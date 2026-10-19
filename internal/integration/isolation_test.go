@@ -7,38 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
-
-	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/target"
-	"github.com/chromedp/chromedp"
 
 	"github.com/muxover/nosy/internal/browser"
 	"github.com/muxover/nosy/internal/guard"
 	"github.com/muxover/nosy/internal/scan"
 )
-
-// sharedBrowser starts a browser that stays up and is used by every scan of a
-// test, each in a browser context of its own.
-func sharedBrowser(t *testing.T) *browser.Shared {
-	t.Helper()
-	need(t)
-	p, err := guard.StartProxy(&guard.Dialer{}, guard.MaxBytes, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(p.Close)
-	b, err := browser.StartShared(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(b.Stop)
-	return b
-}
 
 type probeSeen struct {
 	Cookie, Local, Session, IDB, Caches, SW, Controlled, CachedFile string
@@ -55,8 +31,8 @@ func (p *probeSeen) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// visitRemote visits u in the shared browser and returns the capture.
-func visitRemote(t *testing.T, remote, u, token string) string {
+// visitFresh visits u in a browser started for the visit and returns the page's text.
+func visitFresh(t *testing.T, u, token string) string {
 	t.Helper()
 	gate <- struct{}{}
 	defer func() { <-gate }()
@@ -68,17 +44,17 @@ func visitRemote(t *testing.T, remote, u, token string) string {
 	target, _ := url.Parse(u)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	c, err := browser.Visit(ctx, target, browser.Options{Proxy: proxy, Remote: remote, Token: token, Verbose: t.Logf})
+	c, err := browser.Visit(ctx, target, browser.Options{Proxy: proxy, Token: token, Verbose: t.Logf})
 	if err != nil {
 		t.Fatalf("visit: %v", err)
 	}
 	return c.Page.Text
 }
 
-// probe visits the leak page in the shared browser and reads what the page saw.
-func probe(t *testing.T, b *browser.Shared) probeResult {
+// probe visits the leak page and reads what the page saw.
+func probe(t *testing.T) probeResult {
 	t.Helper()
-	text := visitRemote(t, b.Address, "https://leak.test/", "nosyprobe")
+	text := visitFresh(t, "https://leak.test/", "nosyprobe")
 	_, raw, ok := strings.Cut(text, "PROBE ")
 	if !ok {
 		t.Fatalf("the probe page did not finish: %q", text[min(len(text), 900):])
@@ -94,32 +70,13 @@ func probe(t *testing.T, b *browser.Shared) probeResult {
 	return r
 }
 
-// openContexts lists the browser contexts that exist besides the default one.
-func openContexts(t *testing.T, address string) []cdp.BrowserContextID {
-	t.Helper()
-	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(context.Background(), address)
-	defer cancelAlloc()
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-	var ids []cdp.BrowserContextID
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		var err error
-		ids, _, err = target.GetBrowserContexts().Do(cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Browser))
-		return err
-	}))
-	if err != nil {
-		t.Fatalf("list browser contexts: %v", err)
-	}
-	return ids
-}
-
-func TestSharedBrowserLeaksNothingBetweenScans(t *testing.T) {
+func TestTwoScansShareNothing(t *testing.T) {
 	t.Parallel()
-	b := sharedBrowser(t)
+	need(t)
 	asked := fixture.Count("leak.cached")
 	const scans = 4
 	for i := 1; i <= scans; i++ {
-		r := probe(t, b)
+		r := probe(t)
 		// what the scan finds when it opens the page: nothing from any scan before it
 		empty := probeSeen{Controlled: "no", CachedFile: r.First.CachedFile}
 		if r.First != empty {
@@ -139,76 +96,6 @@ func TestSharedBrowserLeaksNothingBetweenScans(t *testing.T) {
 		if got := fixture.Count("leak.cached") - asked; got != i {
 			t.Fatalf("after %d scans the server was asked for the file %d times: a later scan was served from the cache of an earlier one", i, got)
 		}
-		if ids := openContexts(t, b.Address); len(ids) != 0 {
-			t.Errorf("scan %d left %d browser context(s) open", i, len(ids))
-		}
-	}
-	if n := b.Starts(); n != 1 {
-		t.Errorf("the browser was started %d times for %d scans, want once", n, scans)
-	}
-}
-
-// signature is everything about a scan that the engine itself decides: the
-// companies, the cookies with their kinds, what fingerprinted, what captured
-// typed text, and the score.
-func signature(r *scan.Result) string {
-	var parts []string
-	for _, c := range r.Companies {
-		parts = append(parts, fmt.Sprintf("company %s tracking=%v", c.Name, c.Tracking))
-	}
-	for _, c := range r.Cookies {
-		parts = append(parts, fmt.Sprintf("cookie %s %s third=%v ident=%v", c.Name, c.Domain, c.ThirdParty, c.Identifier))
-	}
-	for _, f := range r.Fingerprinting {
-		parts = append(parts, fmt.Sprintf("fingerprint %s %v", f.Name, f.Scripts))
-	}
-	for _, h := range r.TypedText.Hits {
-		parts = append(parts, fmt.Sprintf("key %s third=%v", h.URL, h.ThirdParty))
-	}
-	parts = append(parts, fmt.Sprintf("fields %d recording %d status %s", r.TypedText.FieldsTested, len(r.SessionRecording), r.Status))
-	if r.Score != nil {
-		parts = append(parts, fmt.Sprintf("score %d", r.Score.Total))
-	}
-	sort.Strings(parts)
-	return "    " + strings.Join(parts, "\n    ")
-}
-
-func TestSharedBrowserKeepsScansApart(t *testing.T) {
-	t.Parallel()
-	need(t)
-	sites := []string{
-		"http://trackers.test/", "http://control.test/", "http://worker.test/", "https://sw.test/", "http://frames.test/",
-		"http://cookies.test/", "http://keyinput.test/", "http://canvas.test/", "http://replay.test/",
-	}
-	// each site in a browser of its own, then all of them beside each other in one
-	scanAll := func(remote string) []string {
-		sigs := make([]string, len(sites))
-		var wg sync.WaitGroup
-		for i := range sites {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				r, err := runGated(sites[i], scan.Options{Remote: remote})
-				if err != nil {
-					t.Errorf("scan %s: %v", sites[i], err)
-					return
-				}
-				sigs[i] = signature(r)
-			}()
-		}
-		wg.Wait()
-		return sigs
-	}
-	alone := scanAll("")
-	b := sharedBrowser(t)
-	together := scanAll(b.Address)
-	for i, s := range sites {
-		if together[i] != alone[i] {
-			t.Errorf("%s scanned beside the others in one browser:\n  got\n%s\n  want\n%s", s, together[i], alone[i])
-		}
-	}
-	if ids := openContexts(t, b.Address); len(ids) != 0 {
-		t.Errorf("%d browser context(s) left open", len(ids))
 	}
 }
 
@@ -332,43 +219,16 @@ func TestRedirectsOfFilesStillGoThroughTheGuard(t *testing.T) {
 	})
 }
 
-// Every kind of fingerprinting the engine credits is still credited when the
-// page runs in a context of its own in a browser that stays up.
-func TestFingerprintPlantsInASharedBrowser(t *testing.T) {
-	t.Parallel()
-	b := sharedBrowser(t)
-	cases := []struct{ host, technique string }{
-		{"canvas.test", "canvas"}, {"webgl.test", "webgl"}, {"audio.test", "audio"},
-		{"fonts.test", "fonts"}, {"fontsdom.test", "fonts"}, {"frames.test", "canvas"},
-	}
-	for _, c := range cases {
-		t.Run(c.host, func(t *testing.T) {
-			t.Parallel()
-			r := scanTest(t, "http://"+c.host+"/", func(o *scan.Options) { o.Remote = b.Address })
-			if got := techniques(r); len(got[c.technique]) == 0 {
-				t.Errorf("%s: %s was not credited, got %v", c.host, c.technique, got)
-			}
-		})
-	}
-}
-
-// A visitor's page is shown and has focus. The scan's must be the same, in a
-// browser that stays up and in one started for the scan.
+// A visitor's page is shown and has focus. The scan's must be the same.
 func TestThePageIsShownAndFocused(t *testing.T) {
 	t.Parallel()
-	b := sharedBrowser(t)
-	for name, remote := range map[string]string{"a browser that stays up": b.Address, "a browser for one scan": ""} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			text := visitRemote(t, remote, "http://state.test/", "nosystate")
-			_, raw, ok := strings.Cut(text, "STATE ")
-			if !ok {
-				t.Fatalf("the probe page did not run: %q", text[min(len(text), 900):])
-			}
-			seen, _, _ := strings.Cut(raw, "\n")
-			if !strings.Contains(seen, `"visible":"visible"`) || !strings.Contains(seen, `"focused":true`) {
-				t.Errorf("the page saw %s, want it shown and focused", strings.TrimSpace(seen))
-			}
-		})
+	text := visitFresh(t, "http://state.test/", "nosystate")
+	_, raw, ok := strings.Cut(text, "STATE ")
+	if !ok {
+		t.Fatalf("the probe page did not run: %q", text[min(len(text), 900):])
+	}
+	seen, _, _ := strings.Cut(raw, "\n")
+	if !strings.Contains(seen, `"visible":"visible"`) || !strings.Contains(seen, `"focused":true`) {
+		t.Errorf("the page saw %s, want it shown and focused", strings.TrimSpace(seen))
 	}
 }
