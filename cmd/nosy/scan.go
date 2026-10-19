@@ -191,7 +191,7 @@ func (a *app) scanError(err error, allowPrivate bool) int {
 }
 
 func refusedAsPrivate(err error) bool {
-	for _, target := range []error{site.ErrIP, site.ErrLocal, site.ErrPort, guard.ErrBlockedAddr, guard.ErrPort} {
+	for _, target := range []error{site.ErrIP, site.ErrLocal, site.ErrPort, guard.ErrBlockedAddr, guard.ErrPort, guard.ErrLocalName} {
 		if errors.Is(err, target) {
 			return true
 		}
