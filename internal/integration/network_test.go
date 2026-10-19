@@ -13,6 +13,7 @@ import (
 // canaries reads every listener the scanner must never reach.
 func canaries(t *testing.T) map[string]int64 {
 	t.Helper()
+	need(t)
 	if fixture.LocalCanary == nil || fixture.UDPCanary == nil || fixture.LocalUDPCanary == nil {
 		t.Fatal("the canaries on 127.0.0.2 and the UDP canaries could not be opened, so the network tests prove nothing here")
 	}
