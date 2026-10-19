@@ -213,6 +213,9 @@ func (i *Installer) Install(ctx context.Context, force bool) (string, error) {
 	if err := rename(staging, i.versionDir()); err != nil {
 		return "", err
 	}
+	if err := allowSandboxedProcesses(i.versionDir()); err != nil {
+		return "", err
+	}
 	path, ok := i.Installed()
 	if !ok {
 		return "", errors.New("the install is not where it was put")

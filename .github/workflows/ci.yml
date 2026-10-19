@@ -129,6 +129,10 @@ jobs:
             "$chrome" --headless=new --disable-gpu --user-data-dir="$RUNNER_TEMP/probe$i" --dump-dom about:blank >/dev/null 2>&1 || echo "exit $?"
             echo "start $i took $(( $(date +%s) - start ))s"
           done
+      - name: One scan with the pinned build
+        if: matrix.source == 'pinned'
+        shell: bash
+        run: go test -p 1 -timeout 4m -tags nosytest -count=1 -v -run TestThePinnedBuildIsUsedWhenNothingElseIsSet ./cmd/nosy
       - name: Planted-page tests
         shell: bash
         run: |
