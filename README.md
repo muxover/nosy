@@ -19,7 +19,8 @@ Nosy is an open-source CLI that investigates a website on your own machine, in a
 
 ## Features
 
-- Every scan runs in an isolated Chromium with a new temporary profile.
+- Every scan runs in an isolated Chromium with site isolation on and a new temporary profile that is deleted when the scan ends, however it ends.
+- Downloads are refused, permission prompts denied, new windows closed and addresses on your machine unreachable. A page that tries any of them is told so in the findings.
 - All browser traffic goes through a local guard proxy that blocks private addresses.
 - Two grades, never mixed: a 0-100 privacy score (public formula v1) and an A-F setup grade.
 - Every finding is labelled observed, classified or inferred, with its evidence.

@@ -22,7 +22,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Storage capture: localStorage, sessionStorage, IndexedDB, Cache Storage names and service workers, per frame origin with first and third party apart, with values that look like identifiers marked by the cookie rule.
 - A manual `Chrome hashes` workflow that prints the size and SHA-256 of each Chrome for Testing build to pin.
 
+- Site isolation is on. Frames of other sites, frames inside them and sandboxed frames are watched with the same instrumentation as the page: requests, cookies, storage, fingerprinting, session recording and typed text found in them are attributed to the frame's origin.
+- Findings for new windows, downloads and addresses on the machine that a page tried to reach, and a `refused` section in the JSON result.
+- `webgl` (hardware, software or none) and `storage_cut_short` in the result's conditions, and a note and a line in the terminal when the storage read ran out of time.
+- Throwaway profiles carry a note of their owner; profiles left by a crashed or killed scan are cleared by the next scan, and only those.
+- Downloads are refused, every permission request denied, and new windows closed before they load anything.
+
 ### Changed
+
+- On Windows, `nosy browser install` gives the downloaded browser's helper processes read access to their folder, as Chrome's installer does. Without it the pinned build could not start its network process from a user folder.
+- Software WebGL stays on as a fallback for machines with no GPU, and the result says which kind a scan got.
+- The shared browser and browser contexts are gone: every scan is its own browser process with its own profile.
 
 - The `chrome` setting now comes before `NOSY_CHROME`.
 - The browser's sandbox can never be turned off. chromedp turned it off by itself for a process running as root; every launch now keeps it on, and the test builds no longer have a switch for it.
