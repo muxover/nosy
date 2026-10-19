@@ -20,7 +20,7 @@ var storageJS string
 
 const (
 	maxStorageFrames = 20
-	storageBudget    = 4 * time.Second
+	storageBudget    = 8 * time.Second
 )
 
 type storageItem struct {
