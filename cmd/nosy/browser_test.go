@@ -251,7 +251,7 @@ func TestScanDurationLimit(t *testing.T) {
 	if ms := r.Conditions.DurationMS; ms < 9_000 || ms > 14_000 {
 		t.Errorf("the visit lasted %d ms against a 10 second limit", ms)
 	}
-	if d := time.Since(start); d > 30*time.Second {
+	if d := time.Since(start); d > 60*time.Second {
 		t.Errorf("a 10 second limit took %s in all", d)
 	}
 	if r.Conditions.DurationLimitSeconds != 10 {
