@@ -33,7 +33,8 @@ func (s *Site) localTargets() []string {
 		"http://169.254.169.254/latest/meta-data/",
 		"http://printer.local/c",
 	}
-	for _, c := range []*Canary{s.CanaryPort, s.HopCanary, s.LocalCanary} {
+	// HopCanary is left out: it belongs to the redirect chain test alone
+	for _, c := range []*Canary{s.CanaryPort, s.LocalCanary} {
 		if c != nil {
 			t = append(t, "http://"+c.Addr+"/c")
 		}
