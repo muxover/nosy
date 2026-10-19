@@ -140,7 +140,7 @@ jobs:
       - name: Check the browser tests ran
         shell: bash
         run: |
-          required="TestControlStaysSilent TestFingerprintPlants TestKeyCapturePlants TestPrivateAddressesNeverReached TestSharedBrowserLeaksNothingBetweenScans TestWorkerRequestsAreCaptured TestStorageIsCapturedPerOrigin TestScanDeviceAndGPC TestInterruptStopsTheBrowserAndExits130"
+          required="TestControlStaysSilent TestFingerprintPlants TestKeyCapturePlants TestPrivateAddressesNeverReached TestTwoScansShareNothing TestCrossSiteFramesAreWatched TestFramesDoingNothingWrongStayQuiet TestPopUpsAreClosedAndReported TestDownloadsAreRefused TestEveryPermissionRequestIsDenied TestLocalAddressesAreNeverOpened TestHSTSIsNotRemembered TestProfileIsRemovedAfterEveryEnding TestProfilesLeftByACrashAreClearedByTheNextScan TestStorageReadCutShortIsSaid TestConditionsRecordIsolationAndWebGL TestWorkerRequestsAreCaptured TestStorageIsCapturedPerOrigin TestScanDeviceAndGPC TestInterruptStopsTheBrowserAndExits130"
           if [ "${{ matrix.source }}" = pinned ]; then
             required="$required TestThePinnedBuildIsUsedWhenNothingElseIsSet"
           fi
