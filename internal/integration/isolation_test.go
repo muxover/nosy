@@ -34,6 +34,7 @@ func (p *probeSeen) UnmarshalJSON(b []byte) error {
 // visitFresh visits u in a browser started for the visit and returns the page's text.
 func visitFresh(t *testing.T, u, token string) string {
 	t.Helper()
+	need(t)
 	gate <- struct{}{}
 	defer func() { <-gate }()
 	proxy, err := guard.StartProxy(&guard.Dialer{}, guard.MaxBytes, nil)

@@ -50,6 +50,7 @@ func finding(r *scan.Result, id string) *scan.Finding {
 
 func TestPopUpsAreClosedAndReported(t *testing.T) {
 	t.Parallel()
+	need(t)
 	before := len(fixture.Requests("popped.test"))
 	r := scanTest(t, "http://popup.test/")
 	if len(r.Refused.Popups) == 0 && r.Refused.PopupsClosed == 0 {
@@ -72,6 +73,7 @@ func TestPopUpsAreClosedAndReported(t *testing.T) {
 
 func TestDownloadsAreRefused(t *testing.T) {
 	t.Parallel()
+	need(t)
 	home, _ := os.UserHomeDir()
 	c, err := visitCapture(t, "http://download.test/", browser.Options{Token: "nosydl"})
 	if err != nil {
@@ -98,6 +100,7 @@ func TestDownloadsAreRefused(t *testing.T) {
 
 func TestEveryPermissionRequestIsDenied(t *testing.T) {
 	t.Parallel()
+	need(t)
 	scanTest(t, "https://perms.test/")
 	var query url.Values
 	for _, q := range fixture.Requests("perms.test") {
@@ -132,6 +135,7 @@ func TestEveryPermissionRequestIsDenied(t *testing.T) {
 
 func TestLocalAddressesAreNeverOpened(t *testing.T) {
 	t.Parallel()
+	need(t)
 	secret := fmt.Sprintf("NOSY-LOCAL-SECRET-%d", time.Now().UnixNano())
 	path := filepath.Join(t.TempDir(), "secret.txt")
 	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
@@ -169,6 +173,7 @@ func TestLocalAddressesAreNeverOpened(t *testing.T) {
 
 func TestHSTSIsNotRemembered(t *testing.T) {
 	t.Parallel()
+	need(t)
 	// the page sets HSTS and then goes to its own plain address: inside a scan the
 	// browser has to remember, or this test could not tell
 	if _, err := visitCapture(t, "https://hsts.test/", browser.Options{}); err != nil {
