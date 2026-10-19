@@ -355,10 +355,14 @@ func TestDoctorFindsTheBrowser(t *testing.T) {
 	h := browserHarness(t)
 	code := h.run("doctor")
 	out := h.out.String()
-	for _, want := range []string{"Browser", os.Getenv("NOSY_CHROME"), "NOSY_CHROME names it", "Version", "Chrome/", "Libraries", "Rules"} {
+	for _, want := range []string{"Browser", os.Getenv("NOSY_CHROME"), "NOSY_CHROME names it", "Version", "Chrome/", "Rules"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor lacks %q:\n%s", want, out)
 		}
+	}
+	// shared libraries are a Linux matter
+	if hasLibs := strings.Contains(out, "Libraries"); hasLibs != (runtime.GOOS == "linux") {
+		t.Errorf("Libraries line present = %v on %s:\n%s", hasLibs, runtime.GOOS, out)
 	}
 	// the sandbox depends on the machine: on a runner that forbids it, doctor says so and fails
 	switch {

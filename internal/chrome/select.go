@@ -50,6 +50,8 @@ func (c Choice) Why() string {
 type Preference struct {
 	Config string // the chrome setting
 	Env    string // NOSY_CHROME
+	// System finds a Chrome or Chromium on the machine; FindSystem when nil.
+	System func() (string, error)
 }
 
 // Select picks the browser. A path the user set must exist: a wrong setting is
@@ -74,7 +76,11 @@ func Select(p Preference, in *Installer) (Choice, error) {
 			return Choice{Path: path, Source: SourcePinned, Version: in.Version}, nil
 		}
 	}
-	if path, err := FindSystem(); err == nil {
+	find := p.System
+	if find == nil {
+		find = FindSystem
+	}
+	if path, err := find(); err == nil {
 		return Choice{Path: path, Source: SourceSystem}, nil
 	}
 	return Choice{}, ErrNoBrowser
@@ -83,8 +89,10 @@ func Select(p Preference, in *Installer) (Choice, error) {
 func resolve(p string) (string, error) { return exec.LookPath(p) }
 
 // FindSystem looks for Google Chrome or Chromium in the usual places.
-func FindSystem() (string, error) {
-	for _, c := range candidates() {
+func FindSystem() (string, error) { return findIn(candidates()) }
+
+func findIn(list []string) (string, error) {
+	for _, c := range list {
 		if filepath.IsAbs(c) {
 			if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
 				return c, nil

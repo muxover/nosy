@@ -38,7 +38,6 @@ func TestSelectOrder(t *testing.T) {
 	cfg := fakeBrowser(t, dir, "from-config")
 	env := fakeBrowser(t, dir, "from-env")
 	sys := fakeBrowser(t, dir, "google-chrome")
-	t.Setenv("PATH", dir)
 	pinned := installedPinned(t)
 
 	c, err := Select(Preference{Config: cfg, Env: env}, pinned)
@@ -53,11 +52,12 @@ func TestSelectOrder(t *testing.T) {
 	if err != nil || c.Source != SourcePinned || !c.Pinned() || c.Version != "155.0.0.1" || !strings.Contains(c.Path, "155.0.0.1") {
 		t.Errorf("then the pinned build: %+v, %v", c, err)
 	}
-	c, err = Select(Preference{}, &Installer{Dir: t.TempDir(), Version: "1", Platform: Platform{Exec: "x"}})
-	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
-		if err != nil || c.Path != sys || c.Source != SourceSystem {
-			t.Errorf("then a system browser: %+v, %v", c, err)
-		}
+	c, err = Select(Preference{System: func() (string, error) { return sys, nil }}, &Installer{Dir: t.TempDir(), Version: "1", Platform: Platform{Exec: "x"}})
+	if err != nil || c.Path != sys || c.Source != SourceSystem {
+		t.Errorf("then a system browser: %+v, %v", c, err)
+	}
+	if _, err := Select(Preference{System: func() (string, error) { return "", ErrNoBrowser }}, nil); !errors.Is(err, ErrNoBrowser) {
+		t.Errorf("nothing anywhere: %v", err)
 	}
 	for _, c := range []Choice{{Source: SourceConfig}, {Source: SourceEnv}, {Source: SourcePinned, Version: "155"}, {Source: SourceSystem}} {
 		if c.Why() == "" {
@@ -69,7 +69,6 @@ func TestSelectOrder(t *testing.T) {
 func TestSelectRefusesAWrongSetting(t *testing.T) {
 	dir := t.TempDir()
 	good := fakeBrowser(t, dir, "google-chrome")
-	t.Setenv("PATH", dir)
 	missing := filepath.Join(dir, "gone")
 
 	_, err := Select(Preference{Config: missing, Env: good}, installedPinned(t))
@@ -83,20 +82,30 @@ func TestSelectRefusesAWrongSetting(t *testing.T) {
 }
 
 func TestOtherChromiumBrowsersAreNeverFoundByThemselves(t *testing.T) {
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-		t.Skip("the PATH search is how Linux finds a browser")
+	if runtime.GOOS == "windows" {
+		t.Skip("the PATH search is how Linux and macOS find a browser by name")
 	}
+	others := []string{"microsoft-edge", "microsoft-edge-stable", "msedge", "brave", "brave-browser", "opera", "vivaldi"}
+	// the places Nosy looks never name them
+	for _, c := range candidates() {
+		for _, o := range []string{"edge", "brave", "opera", "vivaldi"} {
+			if strings.Contains(strings.ToLower(c), o) {
+				t.Errorf("the search list names %s", c)
+			}
+		}
+	}
+	// and with only those on the PATH, the search finds nothing
 	dir := t.TempDir()
-	for _, name := range []string{"microsoft-edge", "microsoft-edge-stable", "msedge", "brave", "brave-browser", "opera", "vivaldi"} {
+	for _, name := range others {
 		fakeBrowser(t, dir, name)
 	}
 	t.Setenv("PATH", dir)
-	if _, err := Select(Preference{}, nil); !errors.Is(err, ErrNoBrowser) {
-		t.Errorf("error = %v, want none found", err)
+	if p, err := findIn([]string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"}); !errors.Is(err, ErrNoBrowser) {
+		t.Errorf("found %s among other browsers", p)
 	}
 	// pointed at one, it is used
 	edge := filepath.Join(dir, "microsoft-edge")
-	if c, err := Select(Preference{Env: edge}, nil); err != nil || c.Path != edge {
+	if c, err := Select(Preference{Env: edge, System: func() (string, error) { return "", ErrNoBrowser }}, nil); err != nil || c.Path != edge {
 		t.Errorf("explicit Edge: %+v, %v", c, err)
 	}
 }

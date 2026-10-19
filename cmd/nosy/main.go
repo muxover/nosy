@@ -74,6 +74,8 @@ type app struct {
 	configPath func() (string, error)
 	// installer makes the installer of the pinned browser
 	installer func() (*chrome.Installer, error)
+	// findSystem looks for a Chrome or Chromium on the machine
+	findSystem func() (string, error)
 	// missingLibs and osRelease are what doctor reads about the system
 	missingLibs func(ctx context.Context, path string) ([]string, error)
 	osRelease   func() string
@@ -88,6 +90,7 @@ func newApp() *app {
 		getenv:      os.Getenv,
 		configPath:  configFile,
 		installer:   func() (*chrome.Installer, error) { return chrome.DefaultInstaller(os.UserCacheDir) },
+		findSystem:  chrome.FindSystem,
 		missingLibs: chrome.MissingLibs,
 		osRelease: func() string {
 			b, _ := os.ReadFile("/etc/os-release")

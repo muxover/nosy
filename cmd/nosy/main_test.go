@@ -46,10 +46,12 @@ func newHarness(t *testing.T) *harness {
 	cfg := filepath.Join(t.TempDir(), "nosy", "config.json")
 	h.cache = filepath.Join(t.TempDir(), "nosy", "chrome")
 	h.app = &app{
-		out:         h.out,
-		err:         h.err,
-		getenv:      func(k string) string { return h.env[k] },
-		configPath:  func() (string, error) { return cfg, nil },
+		out:        h.out,
+		err:        h.err,
+		getenv:     func(k string) string { return h.env[k] },
+		configPath: func() (string, error) { return cfg, nil },
+		// the machine's own Chrome must not leak into the tests
+		findSystem:  func() (string, error) { return "", chrome.ErrNoBrowser },
 		missingLibs: func(context.Context, string) ([]string, error) { return nil, nil },
 		osRelease:   func() string { return "ID=ubuntu\nID_LIKE=debian\n" },
 		installer: func() (*chrome.Installer, error) {

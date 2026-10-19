@@ -165,7 +165,7 @@ func (a *app) chooseBrowser(cur settings) (chrome.Choice, error) {
 	if err != nil {
 		in = nil // no pinned build for this system; the others still apply
 	}
-	return chrome.Select(chrome.Preference{Config: cur.Chrome, Env: a.getenv("NOSY_CHROME")}, in)
+	return chrome.Select(chrome.Preference{Config: cur.Chrome, Env: a.getenv("NOSY_CHROME"), System: a.findSystem}, in)
 }
 
 func (a *app) noBrowser(err error) int {
