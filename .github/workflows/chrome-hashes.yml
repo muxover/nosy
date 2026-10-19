@@ -1,13 +1,10 @@
 name: Chrome hashes
 
-# Prints the SHA-256 of each Chrome for Testing build Nosy can install, from
-# Google's official download URLs, so a version can be pinned in
+# Prints the size and SHA-256 of each Chrome for Testing build Nosy can
+# install, from Google's official download URLs, so a version can be pinned in
 # internal/chrome/pins.go. Run it by hand when the pinned version changes.
 
 on:
-  push:
-    branches: [build]
-    paths: [.github/workflows/chrome-hashes.yml]
   workflow_dispatch:
     inputs:
       version:
@@ -34,7 +31,7 @@ jobs:
           case "$VERSION" in
             *[!0-9.]*|"") echo "not a version: $VERSION"; exit 1 ;;
           esac
-          for p in linux64 mac-arm64 mac-x64 win64 win32; do
+          for p in linux64 mac-arm64 mac-x64 win64; do
             url="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/${p}/chrome-${p}.zip"
             curl -fsS --retry 3 -o "chrome-${p}.zip" "$url"
             size=$(stat -c %s "chrome-${p}.zip")

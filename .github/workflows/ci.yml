@@ -60,24 +60,25 @@ jobs:
           fi
           go test $race -count=1 ./...
 
-  # The planted-page tests drive the Chrome that is already on the runner.
-  # They are built with the nosytest tag and switched on by NOSY_BROWSER_TESTS.
+  # The planted-page tests, on each system with the Chrome already on the runner
+  # (system) and with Nosy's own pinned Chrome for Testing, installed by
+  # `nosy browser install` (pinned). They are built with the nosytest tag and
+  # switched on by NOSY_BROWSER_TESTS. The pinned jobs download the browser from
+  # Google; nothing else in CI touches the outside.
   browser:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            chrome: google-chrome
-            parallel: "4"
-          - os: windows-latest
-            chrome: C:\Program Files\Google\Chrome\Application\chrome.exe
-            parallel: "4"
-          - os: macos-latest
-            chrome: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
-            parallel: "3"
+          - {os: ubuntu-latest, source: system, chrome: google-chrome, parallel: "4"}
+          - {os: ubuntu-latest, source: pinned, parallel: "4"}
+          - {os: windows-latest, source: system, chrome: 'C:\Program Files\Google\Chrome\Application\chrome.exe', parallel: "4"}
+          - {os: windows-latest, source: pinned, parallel: "4"}
+          - {os: macos-latest, source: system, chrome: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome, parallel: "3"}
+          - {os: macos-latest, source: pinned, parallel: "3"}
+    name: browser (${{ matrix.os }}, ${{ matrix.source }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       NOSY_BROWSER_TESTS: "1"
       NOSY_CHROME: ${{ matrix.chrome }}
@@ -88,18 +89,11 @@ jobs:
         with:
           go-version: "1.27"
           cache: false
-      - name: Browser version
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then
-            powershell -Command "(Get-Item '$NOSY_CHROME').VersionInfo.ProductVersion"
-          else
-            "$NOSY_CHROME" --version
-          fi
-      # the Linux runner blocks the browser's sandbox for unprivileged users
-      - name: Allow the browser without its sandbox
+      # Ubuntu 24.04 stops unprivileged programs from making the user namespaces
+      # Chrome's sandbox needs. The sandbox stays on; the runner is told to allow it.
+      - name: Allow the browser's sandbox
         if: runner.os == 'Linux'
-        run: echo "NOSY_NO_SANDBOX=1" >> "$GITHUB_ENV"
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # the safety tests plant listeners on loopback port 80 and 127.0.0.2
       # port 80 that the scan must never reach
       - name: Open loopback port 80 for the canaries
@@ -108,6 +102,18 @@ jobs:
       - name: Add the second loopback address
         if: runner.os == 'macOS'
         run: sudo ifconfig lo0 alias 127.0.0.2 up
+      - name: Install the pinned Chrome
+        if: matrix.source == 'pinned'
+        shell: bash
+        run: |
+          go run ./cmd/nosy browser install
+          echo "NOSY_CHROME=$(go run ./cmd/nosy browser path | head -n 1)" >> "$GITHUB_ENV"
+          echo "NOSY_EXPECT_PINNED=1" >> "$GITHUB_ENV"
+      - name: Doctor
+        shell: bash
+        run: |
+          go run ./cmd/nosy browser path
+          go run ./cmd/nosy doctor
       - name: Planted-page tests
         shell: bash
         run: |
@@ -117,11 +123,15 @@ jobs:
             race="-race"
           fi
           echo "race flag: '${race}'"
-          go test -p 1 -timeout 25m -tags nosytest $race -count=1 -v ./... 2>&1 | tee test.log
+          go test -p 1 -timeout 30m -tags nosytest $race -count=1 -v ./... 2>&1 | tee test.log
       - name: Check the browser tests ran
         shell: bash
         run: |
-          for t in TestControlStaysSilent TestFingerprintPlants TestKeyCapturePlants TestPrivateAddressesNeverReached TestSharedBrowserLeaksNothingBetweenScans TestWorkerRequestsAreCaptured; do
+          required="TestControlStaysSilent TestFingerprintPlants TestKeyCapturePlants TestPrivateAddressesNeverReached TestSharedBrowserLeaksNothingBetweenScans TestWorkerRequestsAreCaptured TestStorageIsCapturedPerOrigin TestScanDeviceAndGPC TestInterruptStopsTheBrowserAndExits130"
+          if [ "${{ matrix.source }}" = pinned ]; then
+            required="$required TestThePinnedBuildIsUsedWhenNothingElseIsSet"
+          fi
+          for t in $required; do
             grep -q -- "--- PASS: $t " test.log || { echo "$t did not run and pass"; exit 1; }
           done
           echo "skipped:"; grep -- "--- SKIP" test.log || true
