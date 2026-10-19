@@ -473,7 +473,7 @@ func pageRefusals(c *capture.Capture) []string {
 	var hosts []string
 	seen := map[string]bool{}
 	for _, rf := range c.Proxy.Refused {
-		k := rf.Host + ":" + rf.Port
+		k := net.JoinHostPort(rf.Host, rf.Port)
 		if asked[rf.Host] && !seen[k] {
 			seen[k] = true
 			hosts = append(hosts, k)
