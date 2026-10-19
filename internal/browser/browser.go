@@ -411,7 +411,13 @@ func (v *visit) setup(ctx context.Context) error {
 			}),
 		)
 	}
-	return chromedp.Run(ctx, actions...)
+	if err := chromedp.Run(ctx); err != nil {
+		return fmt.Errorf("launch: %w", err)
+	}
+	if err := chromedp.Run(ctx, actions...); err != nil {
+		return fmt.Errorf("configure: %w", err)
+	}
+	return nil
 }
 
 func (v *visit) step(s string) {
