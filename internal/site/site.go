@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"golang.org/x/net/idna"
+
+	"github.com/muxover/nosy/internal/guard"
 )
 
 var (
@@ -153,7 +155,7 @@ func cleanHost(h string, allowPrivate bool) (string, error) {
 		}
 		return "", ErrInvalid
 	}
-	if len(labels) < 2 && !allowPrivate {
+	if !allowPrivate && guard.IsLocalName(h) {
 		return "", ErrLocal
 	}
 	for _, r := range h {
