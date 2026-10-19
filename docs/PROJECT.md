@@ -49,7 +49,7 @@ Nosy's place: a clean visit, every finding with its evidence, consent and GPC te
   - `internal/testsite`: the planted pages. `internal/integration`: the tests that visit them.
 - Planned packages: `checks`, `consent`, `report`, `rules`, `publish`. On the VPS from v0.2.0: the index API takes signed uploads, validates them, re-runs the cheap setup checks and stores reports in Postgres; the site reads the same database. No browser, no queue.
 - Test builds use `-tags nosytest`. That tag compiles in the guard's routing and DNS hooks, the planted-page server and a few hooks in the driver, and nothing else compiles them in. The browser tests also need `NOSY_BROWSER_TESTS=1`; without it they skip with a message. `NOSY_CHROME` names the browser, `NOSY_PARALLEL` caps the browsers open at once, `NOSY_EXPECT_PINNED=1` makes the pinned-build test run. The sandbox has no switch: where a machine forbids it, CI turns on the user namespaces it needs.
-- Local folders and the CI layout follow `rules/repo.md` in `muxover/claude-setup`.
+- Local folders and the CI layout follow `rules/repo.md` in `muxover/engram`.
 
 ## Decisions
 
