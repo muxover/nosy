@@ -59,6 +59,11 @@ jobs:
             race="-race"
           fi
           go test $race -count=1 ./...
+          go test -count=1 -tags nosytest ./internal/guard
+      # a short run in CI; a longer one by hand: go test -fuzz=FuzzAddressCheck -fuzztime=10m ./internal/guard
+      - name: Fuzz the address check
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -run '^$' -fuzz=FuzzAddressCheck -fuzztime=30s ./internal/guard
 
   # The planted-page tests, on each system with the Chrome already on the runner
   # (system) and with Nosy's own pinned Chrome for Testing, installed by
@@ -140,7 +145,7 @@ jobs:
       - name: Check the browser tests ran
         shell: bash
         run: |
-          required="TestControlStaysSilent TestFingerprintPlants TestKeyCapturePlants TestPrivateAddressesNeverReached TestTwoScansShareNothing TestCrossSiteFramesAreWatched TestFramesDoingNothingWrongStayQuiet TestPopUpsAreClosedAndReported TestDownloadsAreRefused TestEveryPermissionRequestIsDenied TestLocalAddressesAreNeverOpened TestHSTSIsNotRemembered TestProfileIsRemovedAfterEveryEnding TestProfilesLeftByACrashAreClearedByTheNextScan TestStorageReadCutShortIsSaid TestConditionsRecordIsolationAndWebGL TestWorkerRequestsAreCaptured TestStorageIsCapturedPerOrigin TestScanDeviceAndGPC TestInterruptStopsTheBrowserAndExits130"
+          required="TestControlStaysSilent TestNoWayOutReachesTheLocalNetwork TestAllowPrivateOpensTheLocalNetworkButNotMetadata TestRefusesBeforeScanning TestRedirectsToPrivateAddressAreDropped TestFingerprintPlants TestKeyCapturePlants TestPrivateAddressesNeverReached TestTwoScansShareNothing TestCrossSiteFramesAreWatched TestFramesDoingNothingWrongStayQuiet TestPopUpsAreClosedAndReported TestDownloadsAreRefused TestEveryPermissionRequestIsDenied TestLocalAddressesAreNeverOpened TestHSTSIsNotRemembered TestProfileIsRemovedAfterEveryEnding TestProfilesLeftByACrashAreClearedByTheNextScan TestStorageReadCutShortIsSaid TestConditionsRecordIsolationAndWebGL TestWorkerRequestsAreCaptured TestStorageIsCapturedPerOrigin TestScanDeviceAndGPC TestInterruptStopsTheBrowserAndExits130"
           if [ "${{ matrix.source }}" = pinned ]; then
             required="$required TestThePinnedBuildIsUsedWhenNothingElseIsSet"
           fi
