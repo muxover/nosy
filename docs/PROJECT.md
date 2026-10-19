@@ -2,39 +2,54 @@
 
 ## What this is
 
-Nosy is an open-source CLI that investigates what a website does to its visitors, on the user's own machine, in a clean throwaway browser.
+Nosy is an open-source CLI that investigates what a website does to its visitors, on the user's own machine, in a clean throwaway browser. `nosy scan example.com` opens the site in an isolated Chromium, watches everything it does, checks how the site is set up, and writes a report: a terminal summary, a single-file HTML report to open or share, and a JSON file for scripts.
 
-`nosy scan <url>` opens the site in an isolated Chromium. Every scan gets a new temporary profile, and all traffic goes through a local guard proxy that blocks private addresses. Nosy records requests, companies, cookies, storage, fingerprinting, session recording and typed-text leaks. It also runs setup checks that need no browser: HTTPS, headers, first cookies, ads.txt, page source, SPF, DMARC and similar.
+- Runs on the user's machine. The VPS never runs a browser again.
+- Open source (GPL-3.0), so people who study privacy and security can read every line they run.
+- Free, with no telemetry.
+- Sharing is opt-in and ships in v0.2.0: asked on first run, default No, changeable any time.
+- nosy.muxover.com becomes a thin site: install, docs, methodology, and later the public index of shared reports, dated and kept for good.
 
-Output is a terminal summary, a single-file offline HTML report and a versioned JSON report.
+### Who it's for
 
-### Principles
+People who need evidence of what a site does: privacy and security researchers; developers and site owners checking their own site before a release or in CI; auditors and agencies who need a dated report for a client; journalists who want proof they can cite.
 
-- Two grades, never mixed: a 0-100 privacy score (public formula v1) and an A-F setup grade.
-- Every finding is labelled observed, classified or inferred, with its evidence.
-- Every report records its conditions: date, country, browser and version, device, consent mode, duration, Nosy version and rules version.
-- Detection rules come from [muxover/nosy-rules](https://github.com/muxover/nosy-rules): EasyPrivacy, AdGuard companiesdb and Nosy overrides (CC BY-SA, signed). DuckDuckGo Tracker Radar is not used.
-- No telemetry, no server-side scanning, free.
-- Sharing to the public index at nosy.muxover.com is opt-in: asked on first run, default No, switched with `nosy config share on|off`. It ships in v0.2.0, not before.
+| Tool | Good at | Misses for this job |
+| --- | --- | --- |
+| Browser DevTools | Seeing requests by hand | No classification, no report, slow for many sites, uses your own profile |
+| Burp, ZAP, mitmproxy | Intercepting and attacking traffic | Built for pentesting; no company mapping, consent tests or score |
+| EDPS Website Evidence Collector | Evidence for inspectors | Heavy setup, no history, no shared index |
+| Blacklight | Quick public check | Runs on their servers, one region, no consent comparison, no CI |
+
+Nosy's place: a clean visit, every finding with its evidence, consent and GPC tested, a CI mode, and a shared, dated public index.
 
 ## Stack and layout
 
 - Go (current stable), one module: `github.com/muxover/nosy`. Dependencies: `chromedp` and `cdproto` for the browser, `gobwas/ws` for the second DevTools connection, `x/net` for the public suffix list.
+- Three repos:
+
+| Repo | Holds | Licence |
+| --- | --- | --- |
+| `muxover/nosy` (public) | The CLI | GPL-3.0 |
+| `muxover/nosy-rules` (public) | Tracker domains, companies, categories, replay vendors, consent platforms, fingerprint patterns; signed releases | CC BY-SA 4.0 |
+| `muxover/nosy-index` (private, v0.2.0) | Index API and the site at nosy.muxover.com | Private |
+
+- The old implementation is in the private `muxover/nosy-legacy` repo and is read only.
 - `cmd/nosy/` is the command line, on the standard library alone (`flag`, `encoding/json`): `main.go` routes, `scan.go`, `check.go`, `browser.go`, `config.go` and `doctor.go` are the commands, `print.go` the plain terminal output, `term.go` the progress line, `flags.go` the flag helpers. An `app` value holds what a command takes from the machine (streams, environment, config path), so tests run the commands in process.
 - The engine lives under `internal/` and has no public API yet:
-  - `internal/browser`: the Chromium driver. At the end of a visit it also reads what each frame origin stored: `storage.js` runs in a world of its own in every frame, so a third-party frame is read from its own partition. A visit gets a new temporary profile, or a browser context of its own in a browser that stays up. A second DevTools connection (`Target.setAutoAttach`, paused on start) attaches frames and workers before their first line runs. `instrument.js` is added with `Page.addScriptToEvaluateOnNewDocument` and reports through a `Runtime.addBinding` the page cannot see afterwards.
-  - `internal/guard`: the proxy every browser byte goes through. It resolves names itself, refuses private, loopback, link-local, metadata and reserved addresses and any port but 80 and 443, checks the address again on the socket before connect, and counts bytes against the size cap.
-  - `internal/scan`: one scan, from the address to the `scan.Result`. It parses the address, checks it with the guard, runs the visit (repeated while the browser's network restarts, and once more if the page was blocked), runs the detectors and scores. `Build` turns a capture into a result without a browser.
-  - `internal/chrome`: which browser a scan uses and Nosy's own. `Select` applies the order below, `Installer` downloads the pinned Chrome for Testing, checks its SHA-256 and unpacks it, `MissingLibs` and `InstallHint` find the system libraries a Linux Chrome lacks, `CheckVersion` enforces the minimum.
-  - `internal/check`: the browser-less look at a site for `nosy check`, through the guard's dialer.
+  - `internal/browser`: the Chromium driver. `browser.go` is the visit, `children.go` the second DevTools connection for frames, workers and new windows in other processes, `frames.go` and `storage.go` what is typed into and read from those frames, `lockdown.go` downloads and permissions, `profile.go` the throwaway profile and the clearing of old ones, `instrument.js` and `storage.js` the scripts that run in the page.
+  - `internal/guard`: the proxy every browser byte goes through, and the dialer that checks addresses.
+  - `internal/scan`: one scan, from the address to the `scan.Result`. `Build` turns a capture into a result without a browser.
+  - `internal/chrome`: which browser a scan uses and Nosy's own pinned Chrome for Testing: selection, download and unpacking, library check on Linux, version check.
+  - `internal/check`: the browser-less look at a site for `nosy check`.
   - `internal/site`: parsing and validating the address a user types.
   - `internal/capture`: plain data for one visit.
   - `internal/detect`: company and tracker matching, identifier cookies, fingerprinting, session recording, typed-text leaks, bot checks and thin pages.
   - `internal/score`: formula v1, unchanged from the old engine.
   - `internal/testsite`: the planted pages. `internal/integration`: the tests that visit them.
-- Test builds use `-tags nosytest`. That tag compiles in the guard's routing and DNS hooks and the planted-page server, and nothing else compiles them in. The browser tests also need `NOSY_BROWSER_TESTS=1`; without it they skip with a message. `NOSY_CHROME` names the browser, `NOSY_NO_SANDBOX=1` runs it without its sandbox where the machine forbids one, `NOSY_PARALLEL` caps the browsers open at once.
-- Old code lives in the private `muxover/nosy-legacy` repo and is read only.
-- Rules live in `muxover/nosy-rules`.
+- Planned packages: `checks`, `consent`, `report`, `rules`, `publish`. On the VPS from v0.2.0: the index API takes signed uploads, validates them, re-runs the cheap setup checks and stores reports in Postgres; the site reads the same database. No browser, no queue.
+- Test builds use `-tags nosytest`. That tag compiles in the guard's routing and DNS hooks, the planted-page server and a few hooks in the driver, and nothing else compiles them in. The browser tests also need `NOSY_BROWSER_TESTS=1`; without it they skip with a message. `NOSY_CHROME` names the browser, `NOSY_PARALLEL` caps the browsers open at once, `NOSY_EXPECT_PINNED=1` makes the pinned-build test run. The sandbox has no switch: where a machine forbids it, CI turns on the user namespaces it needs.
+- Local folders and the CI layout follow `rules/repo.md` in `muxover/claude-setup`.
 
 ## Decisions
 
@@ -66,76 +81,235 @@ Output is a terminal summary, a single-file offline HTML report and a versioned 
 - 2026-10-19: `nosy browser install` downloads only from `storage.googleapis.com` over HTTPS and refuses a redirect to any other host. It reads no more than the pinned size, checks the SHA-256 before a byte is unpacked, unpacks into a staging folder (refusing paths and links that leave it), and moves it into `<user cache>/nosy/chrome/<version>/` in one step. `--force` downloads again; `nosy browser remove` deletes that `nosy/chrome` folder and nothing else, and refuses any other folder.
 - 2026-10-19: on Linux `doctor` runs `ldd` on the browser and names the missing libraries with the install command for Debian and Ubuntu, Fedora and RHEL, Arch and openSUSE. A library that is not in the table is still listed.
 - 2026-10-19: storage capture reads localStorage, sessionStorage, IndexedDB (databases, versions, object stores, entry counts, the first keys and string values), Cache Storage names and registered service workers, per frame origin, with first and third party apart. Values are checked with the cookie identifier rule (`detect.LooksLikeIdentifier`) and are never written to a result. A sessionStorage value is gone with the tab, so by the cookie rule for session cookies it is listed but never an identifier. Storage is observation: it does not change the score. Limits: 20 frames, 50 keys, 25 IndexedDB keys and 20 entries per store, 300 characters per value.
-- 2026-10-19: where the browser-only checks run: in the one visit, in the one browser Nosy starts on the user's machine, collected at the end of the visit and analysed afterwards by `scan.Build` from the capture. The checks that need no browser (`nosy check` now, the setup checks of step 9) run in the Go process through the guard's dialer. There is no shared browser, pool or replacement logic. `Options.Remote` stays for the isolation tests until step 6 decides.
+- 2026-10-19: where the browser-only checks run: in the one visit, in the one browser Nosy starts on the user's machine, collected at the end of the visit and analysed afterwards by `scan.Build` from the capture. The checks that need no browser (`nosy check` now, the setup checks of step 9) run in the Go process through the guard's dialer. There is no shared browser, pool or replacement logic. `Options.Remote` stays for the isolation tests until step 6 decides. Step 6 removed it.
 - 2026-10-19: the browser and everything it started are taken down when the scan's context ends: on Unix the whole process group, on Windows `taskkill /T` from the command's `Cancel` hook while the main process is still alive to name the tree. Ctrl+C on Windows is tested by starting the command with `CREATE_NEW_PROCESS_GROUP` and sending `CTRL_BREAK_EVENT`, which Go delivers as `os.Interrupt`.
 - 2026-10-19: on Windows `nosy browser install` gives the build's sandboxed helper processes read access with `icacls` (ALL APPLICATION PACKAGES and ALL RESTRICTED APPLICATION PACKAGES), as Chrome's own installer does. Without it the network helper never starts from a user folder: the first call that needs it, `Network.clearBrowserCookies`, never returns and every scan times out. System Chrome is not affected. The sandbox stays on; this widens nothing the browser could not already read.
+- 2026-10-19: Jax's call, step 5 answers. The `icacls` grant on Windows is fine: read-only for the same two app-package groups Chrome's own installer grants, sandbox untouched. The 8 second storage budget is fine, but a scan that hits it says so (see below). The `ci:` commits already pushed stay as they are; CI changes are `chore:` from now on. Linux and Windows on arm64 have no Chrome for Testing build, use a system Chrome, and `doctor` and `browser install` say so.
+- 2026-10-19: Jax's call. History is never squashed. At v0.1.0 `build` goes to `main` with all its commits, and the release script adds one signed `chore: release v0.1.0` commit on top.
+- 2026-10-19: on Windows `nosy browser install` gives the sandboxed helper processes of the build read access with `icacls` (ALL APPLICATION PACKAGES and ALL RESTRICTED APPLICATION PACKAGES), as Chrome's own installer does. From a user folder without it the network helper never starts: the first call that needs it, `Network.clearBrowserCookies`, never returns and every scan times out. System Chrome is not affected. The sandbox stays on and nothing is widened.
+- 2026-10-19: the storage read has 8 seconds in all. A read that runs out of time, a database that does not open in 2 seconds, or a visit that ended on its time or size limit sets `storage_cut_short` in the conditions, adds a note, and the terminal conditions say "storage read cut short". A result never shows less storage without saying so.
+- 2026-10-19: site isolation is on, as in a visitor's Chrome. The flags `IsolateOrigins`, `site-per-process` and `disable-site-isolation-trials` are gone, and a test counts the frames that arrive as targets of their own.
+- 2026-10-19: a frame in another process is watched by the second DevTools connection, which already paused workers on start. Each such frame (and each frame inside it) is paused, gets the page's own setup (Network, Page, Log and Runtime on, the binding, `instrument.js` for every new document, user agent, locale, focus, touch and Global Privacy Control) and is let go. The setup is built once and replayed, so a frame in another process and the page cannot drift apart. Over its own session the same connection types the test text into the frame's fields, reads its storage in an isolated world and asks for its request bodies.
+- 2026-10-19: what happens in a frame is attributed to the frame. A request carries the origin of the document that made it, a fingerprinting call or cookie write the origin it ran in, and a typed-text hit or session-recording match the frame of the request behind it. Storage was already per origin.
+- 2026-10-19: `enable-unsafe-swiftshader` stays, as a fallback only. It lets Chrome fall back to software WebGL when the machine has no GPU; with a GPU Chrome uses it. Without the flag a machine with no GPU would answer "no WebGL" to scripts that check, which a visitor's Chrome would not, and fingerprinting scripts that bail out early would go unseen. Forcing software always would make results reproducible across machines but would hide what a visitor with a GPU sees, and detection does not depend on the renderer string. Each result records `webgl` as hardware, software or none, probed on the blank tab before the page loads, and lists "software WebGL (no GPU found)" in the settings when it was software. The renderer name is never kept: it identifies the user's GPU.
+- 2026-10-19: each scan has a new profile in the temp folder, named `nosy-profile-` and holding a note with the owner's process number. It is deleted after a normal end, an error, Ctrl+C and a killed Chrome. A failed removal is a note on the result. The next scan clears the profiles of scans that were killed, only folders with that name and Nosy's note whose owner is gone or whose note is over an hour old (a scan lasts two minutes at most). A profile in use, a folder without the note and any other name stay. Nothing outside the temp folder is ever read or deleted, and the user's own Chrome profile, cookies and extensions are never touched.
+- 2026-10-19: the browser is locked down three ways, so one failing does not open a door. Launch flags and the profile: `--deny-permission-prompts`, no extensions or component extensions with background pages, no first run or sync, content settings for every permission set to block, downloads going to a folder inside the profile. The browser connection: `Browser.setPermission` denied for every permission the protocol names and `Browser.setDownloadBehavior` deny. The page connection: every new window is closed before it loads anything and the attempt is a finding, as is every download and every address on this machine (`file:`, `chrome:` and the like) the page reaches for. Each finding comes from what the browser reports.
+- 2026-10-19: `Options.Remote`, the shared browser and browser contexts are removed. The CLI never used them; only the tests did, to run many scans in one browser, and they were a second way of isolating scans that needed tests of its own. Every scan is its own browser process with its own profile, so the process boundary is the isolation, and one set of tests proves it.
+- 2026-10-19: when the page script has no web address in its stack (code run from `eval`, for instance), its fingerprinting call is listed as "inline in" the frame's origin.
 - 2026-10-17: work happens one build step at a time on the `build` branch and is reviewed before the next step. Nothing is tagged or released from it.
 
 ## Status
 
-Steps 1 to 5 are done. `nosy scan`, `check`, `browser install|path|remove`, `config`, `doctor`, `version` and `help` work, and the engine behind them is tested against a real Chromium on Linux, Windows and macOS, both a Chrome already on the machine and Nosy's pinned build.
+Steps 1 to 6 of v0.1.0 are done (build order below). `nosy scan`, `check`, `browser install|path|remove`, `config`, `doctor`, `version` and `help` work, and the engine behind them is tested against a real Chromium on Linux, Windows and macOS, both a Chrome already on the machine and Nosy's pinned build, with the race detector on.
 
-Until rules v1 (step 8) there is no tracker data: a scan lists the companies it contacted and notes that none is classified, so scores come from fingerprinting, cookies, session recording and typed-text leaks only. Storage is reported but not scored. `scan.Result` is the type the reports will render from; its JSON layout (`nosy-scan/0`) is provisional until step 10, and the conditions already record the browser, whether it was the pinned build, the third-party cookie setting, site isolation and software WebGL.
+What works:
 
-What was left behind on purpose, because it is server-side or belongs to a later step: the web app, store, queue, worker, share cards, Turnstile and rate limits; the shared-browser pool and its replacement logic; the live request feed; the report renderers (step 10); technology detection from webappanalyzer rules, so consent platforms found that way are not reported, only the consent APIs the page exposes; country lookup from IP ranges (step 8).
+- A scan with site isolation on: frames of other sites, frames inside them and sandboxed frames are watched, and what they do is attributed to their origin.
+- Requests, cookies, storage (local, session, IndexedDB, Cache Storage, service workers) per origin, fingerprinting by technique, session-recording vendors and typed-text leaks, each labelled observed, classified or inferred.
+- A new profile per scan, removed after every kind of ending, with old ones from crashes cleared by the next scan.
+- Downloads refused, permission prompts denied, new windows closed, addresses on the machine unreachable, each reported when the page tried.
+- `nosy browser install` for a pinned Chrome for Testing (155.0.8059.84) on linux64, mac-arm64, mac-x64 and win64.
+
+What was left behind on purpose, because it is server-side or belongs to a later step: the web app, store, queue, worker, share cards, Turnstile and rate limits; the live request feed; the report renderers (step 10); technology detection from webappanalyzer rules, so consent platforms found that way are not reported, only the consent APIs the page exposes; country lookup from IP ranges (step 8).
+
+Until rules v1 (step 8) there is no tracker data: a scan lists the companies it contacted and notes that none is classified, so scores come from fingerprinting, cookies, session recording and typed-text leaks only. Storage is reported but not scored. `scan.Result` is the type the reports will render from; its JSON layout (`nosy-scan/0`) is provisional until step 10.
 
 Behaviour that differs from the old engine:
 
 - The page lookups for technology rules (`window` paths and DOM selectors) are no longer collected, and `capture.Page` lost its `JS` and `DOM` fields. Page source, scripts, meta tags and response headers are still collected, for the setup checks.
-- `browser.Options` lost `Probes` and `Seen`. `guard.StartProxy` no longer takes a listen or advertise address.
+- `browser.Options` lost `Probes`, `Seen` and `Remote`. `guard.StartProxy` no longer takes a listen or advertise address.
 - `detect.DetectConsent` takes platform names instead of technology detections.
 - The tracker classes are `detect.Class` constants with a `Class` prefix, because `detect.Replay` is a function.
-- The browser starts with third-party cookie tracking protection off (see Decisions), and the sandbox can never be turned off.
+- The browser starts with third-party cookie tracking protection off, and the sandbox can never be turned off.
 
-## Next
+Never tried:
 
-Step 6: isolation. Turn site isolation on, keep capture working for out-of-process iframes and workers, test it, decide the fate of `Options.Remote`.
+- A real Windows or macOS desktop with a GPU. Every browser test ran on GitHub's runners and a Linux container, which have none or a virtual one, so hardware WebGL, high-DPI screens, several monitors and a browser that is also open for the user are untested.
+- Linux or Windows on arm64. There is no pinned build there; only the error path is tested. macOS on arm64 is tested only on the runner.
+- A corporate proxy, a VPN, TLS interception and a network that blocks the guard's resolver.
+- A real run of `nosy browser install` outside CI, and the install channels (Homebrew, Scoop, Go, releases): step 12.
+- Sites in languages and layouts beyond the planted pages and the old engine's golden list: step 11.
 
-## v0.1.0 build order
+## How it works
 
-### 1. Save old code
+These parts hold across versions.
 
-Done. The previous implementation is kept in `muxover/nosy-legacy`.
+### Scan pipeline
 
-### 2. Scaffold
+1. `site.Parse` checks the address; the guard refuses private, loopback, link-local and metadata addresses before any browser starts (`--allow-private` is the one way around it, with a warning on every use).
+2. Old Nosy profiles from crashed scans are cleared. A new temp profile is made.
+3. The guard proxy starts on a local port. Chrome starts with the profile, the proxy, site isolation on and the lockdown flags.
+4. The visit: open the page, wait for a quiet network (capped), scroll like a reader, type a test string into visible text fields without sending, collect page facts, cookies and storage. The whole visit is capped by the hard stop (20 seconds by default, 10 to 120).
+5. `scan.Build` turns the capture into a result: companies, cookies, storage, fingerprinting, session recording, typed text, refused items, findings, score. A thin or bot-checked first visit gets one more try. A crash or a browser network restart repeats the visit up to twice.
+6. The browser is killed with its whole process tree, the profile is removed, the result is printed.
 
-Module, entry point with `version` and `help`, repo files, CI and release workflow, repo settings.
+### Isolation
 
-### 3. Port engine
+- One browser process and one profile per scan. Nothing is shared between scans: no cookies, storage, cache, service workers or HSTS state, and tests prove it by running two scans in a row.
+- The sandbox is on and cannot be turned off. `doctor` explains the fix where a machine forbids it.
+- Site isolation is on, so a frame of another site runs in its own process. A second DevTools connection attaches each such frame and each worker before its first line runs and gives it the same setup as the page (see Decisions).
+- Downloads are refused, permissions denied, new windows closed, and `file:`, `chrome:` and the like unreachable. The profile and the launch flags say it, the browser connection says it, and the page connection reports what was tried.
+- The user's own Chrome profile, cookies and extensions are never read.
 
-Done. Browser driver, guard, capture, detect and score, ported from the old code. See Status for what was left behind and what changed.
+### Guard
 
-### 4. CLI commands
+Every request goes through a local proxy. It resolves names itself, refuses private, loopback, link-local, metadata and reserved addresses and any port but 80 and 443, checks the address again on the socket before connecting, follows at most 20 redirects, and counts bytes against the size cap (60 MB by default). Step 7 tests it on all three systems.
 
-Done. `scan`, `check`, `config`, `doctor`, with exit codes 0, 1, 2 and 130. `report`, `rules update` and `browser install` are not registered; they come in steps 10, 8 and 5.
+### Scores and labels
 
-### 5. Browser handling
+- Two grades, never mixed: a privacy score 0 to 100 from what the page did (public formula v1, five bands from Not nosy to Extremely nosy), and a setup grade A to F from how the site is configured (step 9).
+- Every finding is labelled observed (the browser saw it happen), classified (observed, then matched to a rule or list) or inferred (concluded from a pattern), and opens to the request, cookie or script behind it and the rule it matched. Inferred findings are worded with care: reading canvas pixels does not prove a fingerprint was sent.
+- Storage and refused items are observed and do not change the score.
 
-Done. `nosy browser install|path|remove`, the selection order, the minimum version, the Linux library check in `doctor`, storage capture, and the Windows Ctrl+C test. CI runs the browser tests on each system against a system Chrome and against the pinned build.
+### Conditions
 
-### 6. Isolation
+Every result records its conditions: date and time, country the scan ran from (unknown until step 8), browser and version and whether it was the pinned build and why that browser was chosen, device and viewport, consent mode, Global Privacy Control, duration limit and time used, Nosy version, rules version, `webgl`, whether the storage read was cut short, and the browser settings Nosy changed (third-party cookie phase-out off, site isolation on, software WebGL). Two reports are compared only when their conditions match.
 
-### 7. Guard on desktop
+### Rules flow
 
-### 8. Rules v1
+- `nosy-rules` builds one versioned, signed rules file. `nosy rules update` downloads it from GitHub Releases and refuses a bad signature. The CLI ships a copy so it works offline from the first run. Every report records the rules version.
+- The first job in the rules repo: map today's known tracker domains through the new sources and compare with the old results on the golden sites. Any company the new data misses gets an override with a public source.
+- The CLI hands the data to every user, which counts as distributing it, so everything shipped must allow that:
 
-### 9. Setup checks
+| Data | Used for | Licence | Status |
+| --- | --- | --- | --- |
+| EasyPrivacy | Spotting tracking requests | GPLv3 or CC BY-SA 3.0; credit "The EasyList authors" | Use |
+| AdGuard companiesdb | Domain to company and category | CC BY-SA 4.0 | Use |
+| Nosy overrides | Fixes, replay vendors, consent platforms, fingerprint patterns | CC BY-SA 4.0 | Build |
+| webappanalyzer | Technology detection | GPL-3.0 | Use |
+| DB-IP Lite | Server country | CC BY 4.0, link back required | Use, credit in reports |
+| HSTS preload list | Preload status | From Chromium's source | Check licence first |
+| Vulnerable JS libraries | Outdated-library check | Candidate: Retire.js data | Check licence first |
+| DuckDuckGo Tracker Radar | Was used before | CC BY-NC-SA 4.0 | Dropped |
 
-### 10. Reports
+### Opt-in sharing
 
-### 11. Golden comparison
+Planned for v0.2.0 (scope below). Nothing leaves the machine unless the user turns sharing on or runs `publish`. Until then there is no sharing code. The only network use besides the scan itself is `nosy browser install`, `nosy rules update` and, on request, `nosy version --check`.
 
-Compare against the old engine within the tolerance above.
+## v0.1.0: Launch
 
-### 12. Packaging
+### Scope
 
-### 13. Docs site
+Commands (every one works offline except `rules update` and `browser install`):
 
-### 14. Release
+| Command | What it does | State |
+| --- | --- | --- |
+| `nosy scan <url>` | Full investigation plus setup checks; terminal summary, `report.html`, `report.json` | Scan and terminal summary done; setup checks step 9, reports step 10 |
+| `nosy check <url>` | Setup checks only, no browser, about 2 seconds | A small version done; step 9 replaces it |
+| `nosy report <file.json>` | Re-renders the HTML report from saved JSON, or opens it | Step 10 |
+| `nosy doctor` | Checks browser, sandbox, rules and config, says what to fix | Done |
+| `nosy config` | Shows and changes settings | Done |
+| `nosy rules update` | Downloads the latest signed detection rules | Step 8 |
+| `nosy browser install` | Pinned Chrome for Testing with a hash check | Done |
+
+Scan options in v0.1.0: `--device desktop|mobile`, `--duration 20s`, `--gpc`, `--allow-private`, `--json`, `--quiet`; later `--out DIR` and `--format html,json`. Every scan types a test string into visible text fields without sending it.
+
+What a scan analyses.
+
+- Behaviour (browser): every request with destination, company, category, size, timing and initiating script; cookies (first and third party, before any click, identifier-like, flags; values never kept); storage per origin; fingerprinting (canvas, WebGL, audio, fonts) per script and frame; session-recording vendors; typed text leaving the page, plain or encoded; GPC; refused items.
+- Setup (no browser, step 9): HTTPS (TLS version, certificate and days to expiry, redirect to HTTPS, HSTS and preload); headers (CSP and how strict it really is, frame protection, Referrer-Policy, Permissions-Policy, COOP, CORP); cookies in the first response and their flags; declared partners (`ads.txt` sellers, domains the CSP allows); page source (third-party scripts without integrity, outdated libraries with known vulnerabilities); email and domain (SPF, DMARC, MTA-STS, DNSSEC, CAA); basics (`security.txt`, a privacy policy link, server countries).
+- One rule for both: only what a normal visitor's browser would do. No probing hidden paths, no attacks, no form submissions.
+
+Outputs: the terminal summary, `report.html` (one offline file: scores, findings with evidence, who contacted whom), `report.json` (documented, versioned schema). The HTML report is safe to open: every value escaped, nothing loaded from the internet, only Nosy's own small script. Tests feed it hostile names, URLs and cookie names.
+
+Install and distribution:
+
+| Channel | Command | Version |
+| --- | --- | --- |
+| GitHub Releases | Windows, macOS, Linux (x64 and arm64), checksums and a signature | v0.1.0 |
+| Go | `go install github.com/muxover/nosy/cmd/nosy@latest` | v0.1.0 |
+| Homebrew | `brew install muxover/tap/nosy` | v0.1.0 |
+| Scoop | `scoop bucket add muxover https://github.com/muxover/scoop-bucket` then `scoop install nosy` | v0.1.0 |
+| Docker | `docker run --rm ghcr.io/muxover/nosy scan example.com` (browser included) | v0.2.0 |
+| GitHub Action | `uses: muxover/nosy-action@v1` | v0.4.0 |
+
+First run offers `nosy browser install` when no browser is found and copies the bundled rules (the sharing question joins in v0.2.0). Homebrew and Scoop avoid SmartScreen and Gatekeeper warnings, so the docs lead with them; paid code signing waits for real use.
+
+Launch:
+
+- A README that sells in 10 seconds: one line, an animated terminal recording of a real `nosy scan`, install commands, one screenshot of the HTML report.
+- nosy.muxover.com with install, docs, methodology, privacy and terms; an example report from a real scan.
+- The one launch email to the coming-soon signups, then the list is deleted. Nosy is unhidden on muxover.com with its category.
+- Communities at launch: X, Telegram and GitHub "awesome" lists only. Growth later comes from research made with Nosy once consent mode exists ("I clicked Reject on 100 sites"), each number checkable by running Nosy.
+- Without telemetry, use is measured by release downloads, Homebrew and Scoop counts, rules-file fetches, index submissions, stars and issues.
+
+### Quality bar
+
+| Kind | Proves | State |
+| --- | --- | --- |
+| Planted pages | Each detection fires on a page built to trigger it and stays quiet on a clean one | Running on all three systems |
+| Cross-platform | Build and planted-page suite pass on Windows, macOS and Linux, on a system Chrome and the pinned build | Running |
+| Isolation | Two scans in a row share no cookies, storage, cache or HSTS; the temp profile is gone after every ending; downloads, permissions, pop-ups and local addresses are refused | Done (step 6) |
+| Guard | Private ranges, every IPv6 form, rebinding DNS, redirects to private hosts, `--allow-private` | Tested on Linux in the sandbox; all three systems in step 7 |
+| Rules | Tampered or unsigned rules refused; offline first run works | Step 8 |
+| Hostile report input | Names, URLs and cookie names crafted to break out of the HTML report show as text | Step 10 |
+| Golden sites | 20 real sites x 3 runs before release; median company count within 10% and score within 5 points of the old engine, or every difference explained | Step 11 |
+
+CI blocks a release on everything except the golden run, which needs real sites; it runs on Jax's PC or as a manual workflow before the release, and its results go in the release notes. CI never depends on outside sites except a job whose feature is the download itself (the pinned-build jobs).
+
+### Build order
+
+| Step | Work | Done when | State |
+| --- | --- | --- | --- |
+| 1 | Save the old code to private `muxover/nosy-legacy`, recreate public `muxover/nosy` and `muxover/nosy-rules` | Both repos exist, old code safe | Done |
+| 2 | Scaffold | CI green on an empty build | Done |
+| 3 | Port the engine (browser, guard, capture, detect, score; server parts left behind) | Planted-page tests pass in the new repo | Done |
+| 4 | CLI commands | Each prints sensible output on a test site | Done |
+| 5 | Browser handling, storage capture | A clean machine goes from install to first scan with two commands | Done |
+| 6 | Isolation | Isolation tests pass on all three systems | Done |
+| 7 | Guard on the desktop | Guard suite passes on all three systems | Next |
+| 8 | Rules v1, signed, bundled; `rules update`; DB-IP country | A tampered file is refused and offline first run works | |
+| 9 | Setup checks | Each has fixture tests | |
+| 10 | Reports: terminal, HTML, JSON schema v1, `nosy report` | Hostile-input tests pass and Jax has read a real report on his PC | |
+| 11 | Golden comparison, 20 sites x 3 runs | Within tolerance, or every difference explained | |
+| 12 | Packaging: binaries with checksums and a signature, Homebrew tap, Scoop bucket | Each install route works from scratch | |
+| 13 | Docs site replaces coming-soon | Passes the website rules at phone and desktop width | |
+| 14 | Release and launch: the release script adds one signed commit on top of the full history and tags v0.1.0; launch email; signup list deleted; Nosy unhidden on muxover.com | A fresh install from each channel scans a real site and the email has gone out | |
+
+Progress: 6 of 14 steps done.
+
+### Release blockers
+
+- A scan that touches the user's own profile or network.
+- A report that runs hostile input.
+- A tampered rules file accepted.
+- A finding the evidence doesn't back.
+- A leftover profile or Chrome process.
+- CI red on any system.
+- Golden sites outside tolerance, unexplained.
+
+## v0.2.0: Index
+
+Scope:
+
+- `nosy publish <file.json>`, sent only with sharing on or `--share`; the first-run question (default No, saved in config, overridden per scan with `--share` and `--no-share`); the terminal always says when a report was shared, with its link.
+- Only public sites (the server checks the host resolves to public addresses). The report JSON only, never a HAR. No IPs kept (country derived, then the IP dropped), no local paths, cookie values, typed test words or install name. Each install has a random key that signs uploads.
+- Trust: every report shows "shared by a Nosy user" with date, country and versions. The server validates the schema, the evidence against the findings and the rules version, and re-runs the cheap setup checks. Agreement across scans builds confidence; outliers wait for review. Site owners can ask for a correction under a published policy.
+- The index site: search a site, history over time and by country, compare dates, methodology, open rules. The Docker image.
+- Quality bar: upload validation and privacy tests pass (bad signature, replay, oversized or inconsistent reports, private hosts, rate limits); the index terms, privacy and correction policy are live.
+- Before the index goes public, a lawyer answers two questions: the UAE online defamation risk of dated user reports about named sites, and the privacy terms the index needs.
+
+## Later
+
+| Version | Theme | Scope |
+| --- | --- | --- |
+| v0.3.0 | Consent | `--consent accept/reject/all`, `--gpc` comparison, `nosy diff`, side by side in the HTML report. Must be true: consent tests on planted banners from the common platforms. |
+| v0.4.0 | CI | `nosy ci` with `--max-score` and `--no-new-trackers`, exit codes and a Markdown summary, the GitHub Action. Must be true: the action fails a pull request on a sample repo when a new tracker appears. |
+| v0.5.0 | Deeper visits | `--pages N` on the same site, `--proxy`, more on storage and service workers. Must be true: crawling never leaves the site and respects its limit. |
+| v0.6.0 | Security depth | CSP analysis, integrity checks, vulnerable libraries, technology stack, email and domain checks. Must be true: each check has fixtures and the data licences are confirmed. |
+| v0.7.0 | Research scale | `nosy batch` with a polite delay, HAR export, network graph and timeline. Must be true: 100 sites in a batch without leaks between scans. |
+| v0.8.0 | Trust | `--sandbox docker`, agreement across submissions, review queue for outliers. Must be true: container mode passes the safety suite. |
+| v0.9.0 | Hardening | Outside security review, fuzzing, full docs, schema freeze proposal. Must be true: no open high-severity issues. |
+| v1.0.0 | Stable | JSON schema and CLI flags frozen, signing keys documented. Must be true: 14 days at v0.9.x with no incident. |
+
+After v1.0.0, only if wanted: Nosy Cloud (paid, through pay.muxover.com), with scheduled monitoring and alerts, private history, signed audit PDFs and team workspaces. Not before the free tool has steady users asking for it.
+
+Never: telemetry, scanning on Nosy's servers, probing hidden paths, a browser without its sandbox.
 
 ## Open questions
 
-- Site isolation is disabled (`IsolateOrigins`, `site-per-process`, `disable-site-isolation-trials`) and `enable-unsafe-swiftshader` is on. Both were inherited from the server container: isolation off puts cross-site iframe requests on the page's own DevTools session, and software WebGL stands in for a GPU the server lacks. On a desktop, site isolation must be on unless step 6 proves capture cannot work with it. Step 6 decides, with tests for out-of-process iframes. Storage capture reads frames from the page's own session, so it needs the same test.
-- The category names the index uses (`Advertising`, `Ad Motivated Tracking`, `CDN` and so on) are the old data's. Rules v1 has its own vocabulary, so `detect.ClassOf` and the CDN rule change in step 8.
-- Linux arm64 and Windows arm64 have no pinned build. A system Chromium works there; whether to offer more (a Docker mode was mentioned) is for later.
-- The Windows search-suggestion test (`TestOwnSearchSuggestionsAreNotScored`) failed once in CI and has passed since. If it fails again the cause is to be found, not retried.
+- The category names the index uses (`Advertising`, `Ad Motivated Tracking`, `CDN` and so on) are the old data's. Rules v1 has its own vocabulary, so `detect.ClassOf` and the CDN rule change. Settled in step 8.
+- Whether `nosy check` stays a separate command once the setup checks exist, or becomes `nosy scan --no-browser`. Settled in step 9.
+- Whether to offer a Docker mode as the safe route on machines that forbid the sandbox, and so on arm64 Linux. Settled in v0.8.0 (`--sandbox docker`); until then `doctor` explains the fix.
+- Whether the golden list of 20 sites needs sites from more languages and regions than the old engine's. Settled in step 11.
+- Whether a Windows or macOS desktop with a GPU shows differences in fingerprint detection that the runners hide. Settled in step 10, when Jax reads a real report on his PC.
