@@ -13,7 +13,7 @@ on:
       version:
         description: Chrome for Testing version to pin
         required: true
-        default: "155.0.8059.39"
+        default: "155.0.8059.84"
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      VERSION: ${{ inputs.version || '155.0.8059.39' }}
+      VERSION: ${{ inputs.version || '155.0.8059.84' }}
     steps:
       - name: Newest stable, for reference
         run: |
