@@ -73,7 +73,7 @@ jobs:
           - {os: ubuntu-latest, source: system, chrome: google-chrome, parallel: "4"}
           - {os: ubuntu-latest, source: pinned, parallel: "4"}
           - {os: windows-latest, source: system, chrome: 'C:\Program Files\Google\Chrome\Application\chrome.exe', parallel: "4"}
-          - {os: windows-latest, source: pinned, parallel: "4"}
+          - {os: windows-latest, source: pinned, parallel: "2"}
           - {os: macos-latest, source: system, chrome: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome, parallel: "3"}
           - {os: macos-latest, source: pinned, parallel: "3"}
     name: browser (${{ matrix.os }}, ${{ matrix.source }})
@@ -102,6 +102,12 @@ jobs:
       - name: Add the second loopback address
         if: runner.os == 'macOS'
         run: sudo ifconfig lo0 alias 127.0.0.2 up
+      # real-time scanning of the freshly unpacked build makes every launch take
+      # a minute; the runner is told to leave nosy's own browser folder alone
+      - name: Leave the pinned Chrome out of the virus scan
+        if: runner.os == 'Windows' && matrix.source == 'pinned'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\nosy"
       - name: Install the pinned Chrome
         if: matrix.source == 'pinned'
         shell: bash
@@ -123,7 +129,7 @@ jobs:
             race="-race"
           fi
           echo "race flag: '${race}'"
-          go test -p 1 -timeout 30m -tags nosytest $race -count=1 -v ./... 2>&1 | tee test.log
+          go test -p 1 -timeout 25m -tags nosytest $race -count=1 -v ./... 2>&1 | tee test.log
       - name: Check the browser tests ran
         shell: bash
         run: |
